@@ -1,61 +1,52 @@
-# PerfectTemplate
-Perfect Empty Starter Project
+# Perfect Zip
+Perfect Zip utility
 
-This repository holds a blank Perfect project which can be cloned to serve as a starter for new work. It builds with Swift Package Manager and produces a stand-alone HTTP executable.
+This Perfect module wraps the minizip C library and provides simple zip and unzip functionality.
 
-Ensure that you have installed the few dependencies which Perfect requires for your platform:
+## Incluing in your project
 
-[Dependencies](https://github.com/PerfectlySoft/Perfect/wiki/Dependencies)
+Add this project as a dependency in your Package.swift file.
 
-## Building & Running
-
-The following will clone and build an empty starter project and launch the server on port 8181.
-
-```
-git clone https://github.com/PerfectlySoft/PerfectTemplate.git
-cd PerfectTemplate
-swift build
-.build/debug/PerfectTemplate
+``` swift
+.Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", versions: Version(0,0,0)..<Version(10,0,0))
 ```
 
-You should see the following output:
+## Running
+
+The following will zip the specified directory:
+
+``` swift
+import PerfectZip
+
+let zippy = Zip()
+
+let thisZipFile = "/path/to/ZipFile.zip"
+let sourceDir = "/path/to/files/"
+
+let ZipResult = zippy.zipFiles(
+	paths: [sourceDir], 
+	zipFilePath: thisZipFile, 
+	overwrite: true, password: ""
+)
+print("ZipResult Result: \(ZipResult.description)")
 
 ```
-Starting HTTP server on 0.0.0.0:8181 with document root ./webroot
-```
 
-This means the server is running and waiting for connections. Access [http://localhost:8181/](http://127.0.0.1:8181/) to see the greeting. Hit control-c to terminate the server.
+To unzip a file:
 
-## Starter Content
+``` swift
+import PerfectZip
 
-The template file contains a very simple "hello, world!" example.
+let zippy = Zip()
 
-```swift
-import PerfectLib
+let sourceDir = "/path/to/files/"
+let thisZipFile = "/path/to/ZipFile.zip"
 
-// Initialize base-level services
-PerfectServer.initializeServices()
+let UnZipResult = zippy.unzipFile(
+	source: sourceDir, 
+	destination: thisZipFile, 
+	overwrite: true
+)
+print("Unzip Result: \(UnZipResult.description)")
 
-// Create our webroot
-// This will serve all static content by default
-let webRoot = "./webroot"
-try Dir(webRoot).create()
-
-// Add our routes and such
-// Register your own routes and handlers
-Routing.Routes["/"] = {
-    request, response in
-    
-    response.appendBody(string: "<html><title>Hello, world!</title><body>Hello, world!</body></html>")
-    response.requestCompleted()
-}
-
-do {
-    
-    // Launch the HTTP server on port 8181
-    try HTTPServer(documentRoot: webRoot).start(port: 8181)
-    
-} catch PerfectError.NetworkError(let err, let msg) {
-    print("Network error thrown: \(err) \(msg)")
-}
 ```
