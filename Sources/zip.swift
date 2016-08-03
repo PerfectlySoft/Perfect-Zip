@@ -10,37 +10,6 @@ import PerfectLib
 import minizip
 
 
-/// Zip error type
-public enum ZipStatus: Error {
-	/// File not found
-	case FileNotFound
-	/// Unzip fail
-	case UnzipFail
-	/// Zip fail
-	case ZipFail
-	/// Cannot overwrite Destination
-	case ZipCannotOverwrite
-	/// No Error
-	case ZipSuccess
-
-	/// User readable description
-	public var description: String {
-		switch self {
-		case .FileNotFound: return "File not found."
-		case .UnzipFail: return "Failed to unzip file."
-		case .ZipFail: return "Failed to zip file."
-		case .ZipCannotOverwrite: return "Cannot overwrite destination file."
-		case .ZipSuccess: return "Success."
-		}
-	}
-}
-public struct ProcessedFilePath {
-	let filePath: String
-	let fileDir: String
-	let fileName: String?
-
-}
-
 // TODO: Doc comments
 
 public class Zip {
@@ -193,16 +162,36 @@ public class Zip {
 
 	*/
 	public func zipFiles(paths: [String], zipFilePath: String, overwrite: Bool, password: String?) -> ZipStatus {
+		let uilContainer = ZipUtilities()
 
 		// Check whether a zip file exists at path.
 		let thisZip = File(zipFilePath)
-		let uilContainer = ZipUtilities()
+		defer {
+			thisZip.close()
+		}
 
+		// make sure destination file is a .zip extension
+		guard zipFilePath.hasSuffix(".zip") else {
+			return ZipStatus.ZipFail
+		}
+
+		// check to make sure destination zip can be created or overwritten
 		if overwrite == false {
 			guard thisZip.exists == false else {
 				return ZipStatus.ZipCannotOverwrite
 			}
 		}
+
+		// check the specified directories or files exist
+		for path in paths {
+			let thisCheckFile = Dir(path)
+//			print("workingDir: \(Dir.workingDir.path)")
+//			print("thisCheckFile.exists: \(thisCheckFile.exists), \(thisCheckFile.path)")
+			guard thisCheckFile.exists == true else {
+				return ZipStatus.FileNotFound
+			}
+		}
+
 		var processedPaths = [ProcessedFilePath]()
 		for path in paths {
 			// Process zip paths
