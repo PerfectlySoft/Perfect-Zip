@@ -43,8 +43,8 @@ let sourceDir = "/path/to/files/"
 let thisZipFile = "/path/to/ZipFile.zip"
 
 let UnZipResult = zippy.unzipFile(
-	source: sourceDir, 
-	destination: thisZipFile, 
+	source: thisZipFile, 
+	destination: sourceDir, 
 	overwrite: true
 )
 print("Unzip Result: \(UnZipResult.description)")
