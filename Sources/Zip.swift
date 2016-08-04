@@ -14,7 +14,7 @@ import minizip
 
 public class Zip {
 
-
+	public init() {}
 	/**
 	Unzip file
 
