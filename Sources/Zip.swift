@@ -9,6 +9,10 @@
 import PerfectLib
 import minizip
 
+#if os(Linux)
+	import SwiftGlibc
+#endif
+
 
 // TODO: Doc comments
 
