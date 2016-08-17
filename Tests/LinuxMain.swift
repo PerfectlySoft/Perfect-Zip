@@ -1,5 +1,5 @@
 import XCTest
-@testable import PerfectZipTestSuite
+@testable import PerfectZipTests
 
 XCTMain([
 	testCase(PerfectZipTests.allTests),
