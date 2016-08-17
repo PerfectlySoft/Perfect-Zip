@@ -73,7 +73,7 @@ public class Zip {
 				return ZipStatus.UnzipFail
 			}
 			var fileInfo = unz_file_info64()
-			memset(&fileInfo, 0, sizeof(unz_file_info.self))
+			memset(&fileInfo, 0, MemoryLayout<unz_file_info>.size)
 			ret = unzGetCurrentFileInfo64(zip, &fileInfo, nil, 0, nil, 0, nil, 0)
 			if ret != UNZ_OK {
 				unzCloseCurrentFile(zip)
