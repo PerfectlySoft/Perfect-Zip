@@ -166,7 +166,7 @@ public class Zip {
 	- throws: Error if zipping fails.
 
 	*/
-	public func zipFiles(paths: [String], zipFilePath: String, overwrite: Bool, password: String?) -> ZipStatus {
+	public func zipFiles(paths: [String], zipFilePath: String, overwrite: Bool, password: String? = nil) -> ZipStatus {
 		let uilContainer = ZipUtilities()
 
 		// Check whether a zip file exists at path.
@@ -189,7 +189,8 @@ public class Zip {
 
 		// check the specified directories or files exist
 		for path in paths {
-			let thisCheckFile = Dir(path)
+			let thisCheckFile = File(path)
+            
 //			print("workingDir: \(Dir.workingDir.path)")
 //			print("thisCheckFile.exists: \(thisCheckFile.exists), \(thisCheckFile.path)")
 			guard thisCheckFile.exists == true else {
