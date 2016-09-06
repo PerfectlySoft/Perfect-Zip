@@ -1,9 +1,8 @@
 //
-//  Package.swift
-//  Perfect Zip
+//  XCTestManifests.swift
 //
-//  Created by Jonathan Guthrie on 7/27/16.
-//	Copyright (C) 2016 PerfectlySoft, Inc.
+//  Created by Jonathan Guthrie on 2016-08-03.
+//  Copyright © 2015 PerfectlySoft. All rights reserved.
 //
 //===----------------------------------------------------------------------===//
 //
@@ -17,13 +16,12 @@
 //===----------------------------------------------------------------------===//
 //
 
-import PackageDescription
+import XCTest
 
-let package = Package(
-	name: "PerfectZip",
-	targets: [],
-	dependencies: [
-		.Package(url: "https://github.com/iamjono/minizip.git", versions: Version(0,0,0)..<Version(10,0,0)),
-		.Package(url: "https://github.com/PerfectlySoft/PerfectLib.git", majorVersion: 2, minor: 0)
-	]
-)
+#if !os(OSX)
+	public func allTests() -> [XCTestCaseEntry] {
+		return [
+			testCase(PerfectZipTests.allTests)
+		]
+	}
+#endif
