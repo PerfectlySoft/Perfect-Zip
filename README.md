@@ -51,12 +51,30 @@ For MacOS insytall minizip using homebrew:
 brew install minizip
 ```
 
-On Ubuntu, install minizip:
+On Ubuntu, install libminizip-dev:
 
 ```
-apt-get install minizip
+apt-get install libminizip-dev
 ```
 
+If libminizip-dev **cannot be found**:   
+First, check that the universe repository is enabled by inspecting `/etc/apt/sources.list`
+
+```
+sudo nano /etc/apt/sources.list
+```
+
+If universe is not included then modify the file so that it does include the next line:
+
+```
+deb http://us.archive.ubuntu.com/ubuntu vivid main universe
+```
+And update the package list:
+
+```
+sudo apt-get update
+```
+Now repeating the first should succeed.
 
 ## Incluing in your project
 
