@@ -86,7 +86,6 @@ struct ZipUtilities {
 				})
 			} catch {}
 		}
-		//	}
 		return processedFilePaths
 	}
 

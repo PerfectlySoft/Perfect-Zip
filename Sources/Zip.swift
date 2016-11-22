@@ -14,22 +14,19 @@ import minizip
 #endif
 
 
-// TODO: Doc comments
-
+/// Zip class to compress and decompress objects
 public class Zip {
 
+	/// init functin. Takes no parameters
 	public init() {}
-	/**
-	Unzip file
 
-	- parameter source:			Local file path of zipped file. URL.
-	- parameter destination:	Local file path to unzip to. URL.
-	- parameter overwrite:		Overwrite bool.
-	- parameter password:		Optional password if file is protected.
 
-	- throws: Error if unzipping fails or if fail is not found.
-	*/
-
+	/// Unzip file
+	/// - parameter source:			Local file path of zipped file. URL.
+	/// - parameter destination:	Local file path to unzip to. URL.
+	/// - parameter overwrite:		Overwrite bool.
+	/// - parameter password:		Optional password if file is protected.
+	/// - throws: Error if unzipping fails or if fail is not found.
 	public func unzipFile(source: String, destination: String, overwrite: Bool, password: String = "") -> ZipStatus {
 
 		// set source file and fail if it does not exist
@@ -155,17 +152,12 @@ public class Zip {
 
 
 
-	/**
-	Zip files.
-
-	- parameter paths:       Array of URL filepaths.
-	- parameter zipFilePath: Destination URL, should lead to a .zip filepath.
-	- parameter overwrite:	 Overwrite bool.
-	- parameter password:    Password string. Optional.
-
-	- throws: Error if zipping fails.
-
-	*/
+	/// Zip files
+	/// - parameter paths:       Array of URL filepaths.
+	/// - parameter zipFilePath: Destination URL, should lead to a .zip filepath.
+	/// - parameter overwrite:	 Overwrite bool.
+	/// - parameter password:    Password string. Optional.
+	/// - throws: Error if zipping fails.
 	public func zipFiles(paths: [String], zipFilePath: String, overwrite: Bool, password: String?) -> ZipStatus {
 		let uilContainer = ZipUtilities()
 
@@ -190,8 +182,6 @@ public class Zip {
 		// check the specified directories or files exist
 		for path in paths {
 			let thisCheckFile = Dir(path)
-//			print("workingDir: \(Dir.workingDir.path)")
-//			print("thisCheckFile.exists: \(thisCheckFile.exists), \(thisCheckFile.path)")
 			guard thisCheckFile.exists == true else {
 				return ZipStatus.FileNotFound
 			}

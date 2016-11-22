@@ -64,3 +64,6 @@ fastlane/screenshots
 
 Packages/
 *.xcodeproj/
+.build_lin
+.packages_lin
+buildlinux
