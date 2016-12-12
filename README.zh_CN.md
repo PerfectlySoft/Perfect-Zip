@@ -1,4 +1,4 @@
-# Perfect Zip [简体中文](README.md)
+# Perfect Zip [English](README.zh_CN.md)
 
 <p align="center">
     <a href="http://perfect.org/get-involved.html" target="_blank">
@@ -39,13 +39,13 @@
     </a>
 </p>
 
-Perfect Zip utility
+Perfect Zip 压缩函数库
 
-This Perfect module wraps the minizip C library and provides simple zip and unzip functionality.
+本 Perfect 项目模块封装了一个 C 函数库，并且提高简单的压缩和解压缩功能。
 
-## Setup
+## 设置
 
-For MacOS install minizip using homebrew:
+如果您使用的是 MacOS 操作系统，请使用homebrew安装minizip：
 
 ```
 brew install minizip
@@ -58,17 +58,17 @@ apt-get install minizip
 ```
 
 
-## Including in your project
+## 在项目中增加本模块
 
-Add this project as a dependency in your Package.swift file.
+请修改 Package.swift 文件增加以下依存关系：
 
 ``` swift
 .Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", majorVersion: 2, minor: 0)
 ```
 
-## Running
+## 运行
 
-The following will zip the specified directory:
+下面的程序展示了一段如何进行压缩：
 
 ``` swift
 import PerfectZip
@@ -83,11 +83,11 @@ let ZipResult = zippy.zipFiles(
 	zipFilePath: thisZipFile, 
 	overwrite: true, password: ""
 )
-print("ZipResult Result: \(ZipResult.description)")
+print("压缩结果： \(ZipResult.description)")
 
 ```
 
-To unzip a file:
+以及解压缩文件：
 
 ``` swift
 import PerfectZip
@@ -102,6 +102,6 @@ let UnZipResult = zippy.unzipFile(
 	destination: sourceDir, 
 	overwrite: true
 )
-print("Unzip Result: \(UnZipResult.description)")
+print("解压缩结果： \(UnZipResult.description)")
 
 ```
