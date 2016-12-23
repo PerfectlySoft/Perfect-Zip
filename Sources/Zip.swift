@@ -114,18 +114,18 @@ public class Zip {
 					}
 				}
 				else {
-                    var parentDirectoryPathArray = fullPath.characters.split(separator: "/").map(String.init)
+					var parentDirectoryPathArray = fullPath.characters.split(separator: "/").map(String.init)
 					parentDirectoryPathArray.removeLast()
-                    
-                    let hasRootPrefix = fullPath.hasPrefix("/")
-                    let parentDirectoryPath: String
-                    if hasRootPrefix {
-                        parentDirectoryPath = "/" + parentDirectoryPathArray.joined(separator: "/")
-                    } else {
-                        parentDirectoryPath = parentDirectoryPathArray.joined(separator: "/")
-                    }
 					
-                    let parentDirectory = Dir(parentDirectoryPath)
+					let hasRootPrefix = fullPath.hasPrefix("/")
+					let parentDirectoryPath: String
+					if hasRootPrefix {
+						parentDirectoryPath = "/" + parentDirectoryPathArray.joined(separator: "/")
+					} else {
+						parentDirectoryPath = parentDirectoryPathArray.joined(separator: "/")
+					}
+					
+					let parentDirectory = Dir(parentDirectoryPath)
 					try parentDirectory.create()
 
 				}
