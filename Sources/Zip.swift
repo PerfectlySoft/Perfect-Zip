@@ -113,7 +113,16 @@ public class Zip {
 				else {
 					var parentDirectoryPathArray = fullPath.characters.split(separator: "/").map(String.init)
 					parentDirectoryPathArray.removeLast()
-					let parentDirectory = Dir(parentDirectoryPathArray.joined(separator: "/"))
+					
+					let hasRootPrefix = fullPath.hasPrefix("/")
+					let parentDirectoryPath: String
+					if hasRootPrefix {
+						parentDirectoryPath = "/" + parentDirectoryPathArray.joined(separator: "/")
+					} else {
+						parentDirectoryPath = parentDirectoryPathArray.joined(separator: "/")
+					}
+					
+					let parentDirectory = Dir(parentDirectoryPath)
 					try parentDirectory.create()
 
 				}
