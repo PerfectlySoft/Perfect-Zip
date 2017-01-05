@@ -54,7 +54,7 @@ brew install minizip
 On Ubuntu, install minizip:
 
 ```
-apt-get install minizip
+apt-get install libminizip-dev
 ```
 
 
