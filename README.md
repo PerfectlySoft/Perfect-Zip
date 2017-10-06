@@ -63,7 +63,7 @@ apt-get install libminizip-dev
 Add this project as a dependency in your Package.swift file.
 
 ``` swift
-.Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", majorVersion: 2, minor: 0)
+.Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", majorVersion: 2)
 ```
 
 ## Running
