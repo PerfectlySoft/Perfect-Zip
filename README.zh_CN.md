@@ -63,7 +63,7 @@ apt-get install libminizip-dev
 请修改 Package.swift 文件增加以下依存关系：
 
 ``` swift
-.Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", majorVersion: 2, minor: 0)
+.Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", majorVersion: 2)
 ```
 
 ## 运行
