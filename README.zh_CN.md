@@ -43,27 +43,12 @@ Perfect Zip 压缩函数库
 
 本 Perfect 项目模块封装了一个 C 函数库，并且提高简单的压缩和解压缩功能。
 
-## 设置
-
-如果您使用的是 MacOS 操作系统，请使用homebrew安装minizip：
-
-```
-brew install minizip
-```
-
-On Ubuntu, install minizip:
-
-```
-apt-get install libminizip-dev
-```
-
-
 ## 在项目中增加本模块
 
 请修改 Package.swift 文件增加以下依存关系：
 
 ``` swift
-.Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", majorVersion: 2)
+.Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", majorVersion: 3)
 ```
 
 ## 运行

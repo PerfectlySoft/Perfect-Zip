@@ -43,27 +43,12 @@ Perfect Zip utility
 
 This Perfect module wraps the minizip C library and provides simple zip and unzip functionality.
 
-## Setup
-
-For MacOS install minizip using homebrew:
-
-```
-brew install minizip
-```
-
-On Ubuntu, install minizip:
-
-```
-apt-get install libminizip-dev
-```
-
-
 ## Including in your project
 
 Add this project as a dependency in your Package.swift file.
 
 ``` swift
-.Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", majorVersion: 2)
+.Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", majorVersion: 3)
 ```
 
 ## Running

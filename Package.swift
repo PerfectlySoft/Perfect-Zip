@@ -1,11 +1,16 @@
-// Generated automatically by Perfect Assistant Application
-// Date: 2017-10-07 18:36:28 +0000
+// swift-tools-version:4.0
 import PackageDescription
 let package = Package(
 	name: "PerfectZip",
-	targets: [],
+	products: [
+		.library(name: "PerfectZip", targets: ["PerfectZip", "minizip"])
+	],
 	dependencies: [
-		.Package(url: "https://github.com/iamjono/minizip.git", majorVersion: 0),
-		.Package(url: "https://github.com/PerfectlySoft/PerfectLib.git", majorVersion: 3),
+		.package(url: "https://github.com/PerfectlySoft/PerfectLib.git", from: "3.0.0"),
+	],
+	targets: [
+		.target(name: "PerfectZip", dependencies: ["minizip", "PerfectLib"]),
+		.target(name: "minizip"),
+		.testTarget(name: "PerfectZipTests", dependencies: ["PerfectZip"])
 	]
 )
