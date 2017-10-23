@@ -10,11 +10,11 @@ let package = Package(
 	],
 	dependencies: [
 		.package(url: "https://github.com/PerfectlySoft/PerfectLib.git", "3.0.0"..<"4.0.0"),
-		.package(url: "https://github.com/PerfectlySoft/Perfect-CZlib.git", from: "0.0.0")
+		.package(url: "https://github.com/PerfectlySoft/Perfect-CZlib-src.git", from: "0.0.1")
 	],
 	targets: [
 		.target(name: "PerfectZip", dependencies: ["minizip", "PerfectLib"]),
-		.target(name: "minizip", dependencies: []),
+		.target(name: "minizip", dependencies: ["PerfectCZlib"]),
 		.testTarget(name: "PerfectZipTests", dependencies: ["PerfectZip"])
 	]
 )
