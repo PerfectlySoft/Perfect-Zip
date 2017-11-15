@@ -93,7 +93,7 @@ public class Zip {
 			}
 			free(fileName)
 
-			if pathString.characters.index(of: "\\") != nil {
+			if pathString.contains(string: "\\") {
 				pathString = pathString.stringByReplacing(string: "\\", withString: "/")
 				pathString = pathString.stringByReplacing(string: "//", withString: "/")
 			}
@@ -111,7 +111,7 @@ public class Zip {
 					}
 				}
 				else {
-					var parentDirectoryPathArray = fullPath.characters.split(separator: "/").map(String.init)
+					var parentDirectoryPathArray = fullPath.split(separator: "/")
 					parentDirectoryPathArray.removeLast()
 					
 					let hasRootPrefix = fullPath.hasPrefix("/")
