@@ -9,7 +9,7 @@ let package = Package(
 		.library(name: "PerfectZip", targets: ["PerfectZip", "minizip"])
 	],
 	dependencies: [
-		.package(url: "https://github.com/PerfectlySoft/PerfectLib.git", "3.0.0"..<"4.0.0"),
+		.package(url: "https://github.com/PerfectlySoft/Perfect.git", "3.0.0"..<"4.0.0"),
 		.package(url: "https://github.com/PerfectlySoft/Perfect-CZlib-src.git", from: "0.0.1")
 	],
 	targets: [
