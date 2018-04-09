@@ -89,12 +89,11 @@ struct ZipUtilities {
 		return processedFilePaths
 	}
 
-	func lastPathComponent(_ path:String) -> String {
-		var pathArray = path.characters.split(separator: "/").map(String.init)
-		if pathArray.last! as String == "" {
+	func lastPathComponent(_ path: String) -> String {
+		var pathArray = path.split(separator: "/")
+		if pathArray.last! == "" {
 			pathArray.removeLast()
 		}
-		return pathArray.last!
+		return String(pathArray.last!)
 	}
-
 }
