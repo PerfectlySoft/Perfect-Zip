@@ -1,260 +1,147 @@
-//
-//  zip.swift
-//  ZipLib
-//
-//  Created by Jonathan Guthrie on 2016-07-28.
-//
-//
-
-import PerfectLib
+import Foundation
 import minizip
 
-#if os(Linux)
-	import SwiftGlibc
-#endif
+public final class Zip: Sendable {
+    public init() {}
 
+    /// Unzip a file from `source` into the `destination` directory.
+    public func unzipFile(source: String, destination: String, overwrite: Bool, password: String = "") -> ZipStatus {
+        let fm = FileManager.default
 
-/// Zip class to compress and decompress objects
-public class Zip {
+        guard fm.fileExists(atPath: source) else { return .FileNotFound }
 
-	/// init functin. Takes no parameters
-	public init() {}
+        if !overwrite && fm.fileExists(atPath: destination) {
+            return .ZipCannotOverwrite
+        }
 
+        let destPath = destination.hasSuffix("/") ? destination : destination + "/"
+        let bufferSize: UInt32 = 4096
+        var buffer = [UInt8](repeating: 0, count: Int(bufferSize))
 
-	/// Unzip file
-	/// - parameter source:			Local file path of zipped file. URL.
-	/// - parameter destination:	Local file path to unzip to. URL.
-	/// - parameter overwrite:		Overwrite bool.
-	/// - parameter password:		Optional password if file is protected.
-	/// - throws: Error if unzipping fails or if fail is not found.
-	public func unzipFile(source: String, destination: String, overwrite: Bool, password: String = "") -> ZipStatus {
+        guard let zip = unzOpen64(source) else { return .UnzipFail }
+        defer { unzClose(zip) }
 
-		// set source file and fail if it does not exist
-		let theZip = File(source)
-		defer {
-			theZip.close()
-		}
-		guard theZip.exists == true else {
-			return ZipStatus.FileNotFound
-		}
+        guard unzGoToFirstFile(zip) == UNZ_OK else { return .UnzipFail }
 
-		// if overwrite false and destination dir exists, fail
-		let theDestination = Dir(destination)
-		if overwrite == false {
-			guard theDestination.exists == false else {
-				return ZipStatus.ZipCannotOverwrite
-			}
-		}
-		var ret: Int32 = 0
-		var crc_ret: Int32 = 0
-		let bufferSize: UInt32 = 4096
-		var buffer = Array<CUnsignedChar>(repeating: 0, count: Int(bufferSize))
+        var ret: Int32 = UNZ_OK
+        repeat {
+            guard unzOpenCurrentFile(zip) == UNZ_OK else { return .UnzipFail }
 
+            var fileInfo = unz_file_info64()
+            guard unzGetCurrentFileInfo64(zip, &fileInfo, nil, 0, nil, 0, nil, 0) == UNZ_OK else {
+                unzCloseCurrentFile(zip)
+                return .UnzipFail
+            }
 
-		// Begin unzipping
-		let zip = unzOpen64(theZip.path)
-		defer {
-			unzClose(zip)
-		}
-		if unzGoToFirstFile(zip) != UNZ_OK {
-			return ZipStatus.UnzipFail
-		}
-		repeat {
-			//			if let cPassword = password as [Int8] { // wrong. TODO: FIX THIS
-//				ret = unzOpenCurrentFilePassword(zip, cPassword)
-//			}
-//			else {
-				ret = unzOpenCurrentFile(zip)
-//			}
-			if ret != UNZ_OK {
-				return ZipStatus.UnzipFail
-			}
-			var fileInfo = unz_file_info64()
-			memset(&fileInfo, 0, MemoryLayout<unz_file_info>.size)
-			ret = unzGetCurrentFileInfo64(zip, &fileInfo, nil, 0, nil, 0, nil, 0)
-			if ret != UNZ_OK {
-				unzCloseCurrentFile(zip)
-				return ZipStatus.UnzipFail
-			}
-			let fileNameSize = Int(fileInfo.size_filename) + 1
-			let fileName = UnsafeMutablePointer<CChar>.allocate(capacity: fileNameSize)
+            let nameLen = Int(fileInfo.size_filename)
+            let nameBuf = UnsafeMutablePointer<CChar>.allocate(capacity: nameLen + 1)
+            defer { nameBuf.deallocate() }
+            unzGetCurrentFileInfo64(zip, &fileInfo, nameBuf, UInt(nameLen + 1), nil, 0, nil, 0)
+            nameBuf[nameLen] = 0
 
-			unzGetCurrentFileInfo64(zip, &fileInfo, fileName, UInt(fileNameSize), nil, 0, nil, 0)
-			fileName[Int(fileInfo.size_filename)] = 0
-			var pathString = String(cString:UnsafePointer<CChar>(fileName))
+            var pathString = String(cString: nameBuf)
+            let isDirectory = nameLen > 0 && nameBuf[nameLen - 1] == 47 // '/'
 
-			var isDirectory = false
+            if pathString.contains("\\") {
+                pathString = pathString
+                    .replacingOccurrences(of: "\\", with: "/")
+                    .replacingOccurrences(of: "//", with: "/")
+            }
+            let fullPath = destPath + pathString
 
-			let fileInfoSizeFileName = Int(fileInfo.size_filename-1)
-			let fnstr  = String(cString:UnsafePointer<CChar>(fileName))
+            if isDirectory {
+                if !fullPath.contains("__MACOSX") {
+                    try? fm.createDirectory(atPath: fullPath, withIntermediateDirectories: true)
+                }
+            } else {
+                let parentPath = URL(fileURLWithPath: fullPath).deletingLastPathComponent().path
+                try? fm.createDirectory(atPath: parentPath, withIntermediateDirectories: true)
 
-			if fileName[fileInfoSizeFileName] == 47 {
-				isDirectory = true;
-			}
-			free(fileName)
+                if !fm.fileExists(atPath: fullPath) || overwrite {
+                    fm.createFile(atPath: fullPath, contents: nil)
+                    if let writeHandle = FileHandle(forWritingAtPath: fullPath) {
+                        defer { writeHandle.closeFile() }
+                        var readBytes: Int32 = 0
+                        repeat {
+                            readBytes = buffer.withUnsafeMutableBytes { ptr in
+                                unzReadCurrentFile(zip, ptr.baseAddress!, bufferSize)
+                            }
+                            if readBytes > 0 {
+                                writeHandle.write(Data(buffer.prefix(Int(readBytes))))
+                            }
+                        } while readBytes > 0
+                    }
+                }
+            }
 
-			if pathString.contains(string: "\\") {
-				pathString = pathString.stringByReplacing(string: "\\", withString: "/")
-				pathString = pathString.stringByReplacing(string: "//", withString: "/")
-			}
-			let fullPath = theDestination.path + pathString
-			let thisFile = File(fullPath)
-			defer {
-				thisFile.close()
-			}
-			// note: ignoring creation date
-			do {
-				if isDirectory {
-					if !fullPath.contains("__MACOSX") {
-						let newDir = Dir(fullPath)
-						try newDir.create()
-					}
-				}
-				else {
-					var parentDirectoryPathArray = fullPath.split(separator: "/")
-					parentDirectoryPathArray.removeLast()
-					
-					let hasRootPrefix = fullPath.hasPrefix("/")
-					let parentDirectoryPath: String
-					if hasRootPrefix {
-						parentDirectoryPath = "/" + parentDirectoryPathArray.joined(separator: "/")
-					} else {
-						parentDirectoryPath = parentDirectoryPathArray.joined(separator: "/")
-					}
-					
-					let parentDirectory = Dir(parentDirectoryPath)
-					try parentDirectory.create()
+            let crcRet = unzCloseCurrentFile(zip)
+            if crcRet == UNZ_CRCERROR { return .UnzipFail }
+            ret = unzGoToNextFile(zip)
 
-				}
-			} catch {}
+        } while ret == UNZ_OK
 
+        return .ZipSuccess
+    }
 
-			if thisFile.exists && !isDirectory && !overwrite {
-				unzCloseCurrentFile(zip)
-				ret = unzGoToNextFile(zip)
-			}
+    /// Zip the files/directories at `paths` into a single archive at `zipFilePath`.
+    public func zipFiles(paths: [String], zipFilePath: String, overwrite: Bool, password: String?) -> ZipStatus {
+        let fm = FileManager.default
 
-			do {
-				try thisFile.open(.truncate)
-				let thisState = true
-				while thisState == true {
-					let readBytes = unzReadCurrentFile(zip, &buffer, bufferSize)
-					if readBytes > 0 {
-						try thisFile.write(bytes: buffer, dataPosition: 0, length: Int(readBytes))
-					} else {
-						break
-					}
-				}
-			} catch {}
+        guard zipFilePath.hasSuffix(".zip") else { return .ZipFail }
 
-			crc_ret = unzCloseCurrentFile(zip)
-			if crc_ret == UNZ_CRCERROR {
-				return ZipStatus.UnzipFail
-			}
-			ret = unzGoToNextFile(zip)
+        if !overwrite && fm.fileExists(atPath: zipFilePath) { return .ZipCannotOverwrite }
 
-		} while (ret == UNZ_OK && ret != UNZ_END_OF_LIST_OF_FILE)
+        for path in paths {
+            guard fm.fileExists(atPath: path) else { return .FileNotFound }
+        }
 
+        let utils = ZipUtilities()
+        var processedPaths = [ProcessedFilePath]()
+        for path in paths {
+            processedPaths += utils.processZipPaths(path, parentDir: "")
+        }
 
-		return ZipStatus.ZipSuccess
-	}
+        guard let zip = zipOpen(zipFilePath, APPEND_STATUS_CREATE) else { return .ZipFail }
+        defer { zipClose(zip, nil) }
 
+        let chunkSize = 16384
 
+        for path in processedPaths {
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: path.filePath, isDirectory: &isDir)
+            guard !isDir.boolValue, let fileName = path.fileName else { continue }
 
-	/// Zip files
-	/// - parameter paths:       Array of URL filepaths.
-	/// - parameter zipFilePath: Destination URL, should lead to a .zip filepath.
-	/// - parameter overwrite:	 Overwrite bool.
-	/// - parameter password:    Password string. Optional.
-	/// - throws: Error if zipping fails.
-	public func zipFiles(paths: [String], zipFilePath: String, overwrite: Bool, password: String?) -> ZipStatus {
-		let uilContainer = ZipUtilities()
+            guard let readHandle = FileHandle(forReadingAtPath: path.filePath) else {
+                return .ZipFail
+            }
+            defer { readHandle.closeFile() }
 
-		// Check whether a zip file exists at path.
-		let thisZip = File(zipFilePath)
-		defer {
-			thisZip.close()
-		}
+            var zipInfo = zip_fileinfo(
+                tmz_date: tm_zip(tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0),
+                dosDate: 0, internal_fa: 0, external_fa: 0
+            )
+            let entryName = path.fileDir.isEmpty ? fileName : path.fileDir + "/" + fileName
 
-		// make sure destination file is a .zip extension
-		guard zipFilePath.hasSuffix(".zip") else {
-			return ZipStatus.ZipFail
-		}
+            if let pw = password, !pw.isEmpty {
+                zipOpenNewFileInZip3(zip, entryName, &zipInfo, nil, 0, nil, 0, nil,
+                                     Z_DEFLATED, Z_DEFAULT_COMPRESSION, 0,
+                                     -MAX_WBITS, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY, pw, 0)
+            } else {
+                zipOpenNewFileInZip3(zip, entryName, &zipInfo, nil, 0, nil, 0, nil,
+                                     Z_DEFLATED, Z_DEFAULT_COMPRESSION, 0,
+                                     -MAX_WBITS, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY, nil, 0)
+            }
 
-		// check to make sure destination zip can be created or overwritten
-		if overwrite == false {
-			guard thisZip.exists == false else {
-				return ZipStatus.ZipCannotOverwrite
-			}
-		}
+            var data = readHandle.readData(ofLength: chunkSize)
+            while !data.isEmpty {
+                _ = data.withUnsafeBytes { ptr in
+                    zipWriteInFileInZip(zip, ptr.baseAddress!, UInt32(data.count))
+                }
+                data = readHandle.readData(ofLength: chunkSize)
+            }
+            zipCloseFileInZip(zip)
+        }
 
-		// check the specified directories or files exist
-		for path in paths {
-			let thisCheckFile = Dir(path)
-			guard thisCheckFile.exists == true else {
-				return ZipStatus.FileNotFound
-			}
-		}
-
-		var processedPaths = [ProcessedFilePath]()
-		for path in paths {
-			// Process zip paths
-			let parentDir = ""
-			for p in uilContainer.processZipPaths(path, parentDir: parentDir) {
-				processedPaths.append(p)
-			}
-		}
-		// Zip set up
-		let chunkSize = 16384
-
-		// Begin Zipping
-		let zip = zipOpen(zipFilePath, APPEND_STATUS_CREATE)
-		for path in processedPaths {
-
-
-			let filePath = path.filePath
-
-			let thisFile = File(filePath)
-
-			if !thisFile.isDir {
-				do {
-					try thisFile.open(.read)
-				} catch {
-					return ZipStatus.ZipFail
-				}
-				let fileName = path.fileName
-				var zipInfo: zip_fileinfo = zip_fileinfo(tmz_date: tm_zip(tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0), dosDate: 0, internal_fa: 0, external_fa: 0)
-
-
-				let buffer = malloc(chunkSize)
-				if password != "", let fileName = fileName {
-					zipOpenNewFileInZip3(zip, path.fileDir+"/"+fileName, &zipInfo, nil, 0, nil, 0, nil,Z_DEFLATED, Z_DEFAULT_COMPRESSION, 0, -MAX_WBITS, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY, password, 0)
-				}
-				else if let fileName = fileName {
-					zipOpenNewFileInZip3(zip, path.fileDir+"/"+fileName, &zipInfo, nil, 0, nil, 0, nil,Z_DEFLATED, Z_DEFAULT_COMPRESSION, 0, -MAX_WBITS, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY, nil, 0)
-				}
-				else {
-					return ZipStatus.ZipFail
-				}
-
-
-
-				do {
-					var bytes = try thisFile.readSomeBytes(count: chunkSize)
-					while bytes.count > 0 {
-						zipWriteInFileInZip(zip, bytes, UInt32(bytes.count))
-						bytes = try thisFile.readSomeBytes(count: chunkSize)
-					}
-				} catch {}
-
-				zipCloseFileInZip(zip)
-				free(buffer)
-				thisFile.close()
-			}
-		}
-		zipClose(zip, nil)
-		return ZipStatus.ZipSuccess
-	}
-
+        return .ZipSuccess
+    }
 }
-
