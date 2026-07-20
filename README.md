@@ -1,4 +1,4 @@
-# Perfect Zip [简体中文](README.md)
+# Perfect Zip [简体中文](README.zh_CN.md)
 
 <p align="center">
     <a href="http://perfect.org/get-involved.html" target="_blank">
@@ -23,12 +23,12 @@
 
 <p align="center">
     <a href="https://developer.apple.com/swift/" target="_blank">
-        <img src="https://img.shields.io/badge/Swift-3.0-orange.svg?style=flat" alt="Swift 3.0">
+        <img src="https://img.shields.io/badge/Swift-6.2-orange.svg?style=flat" alt="Swift 6.2">
     </a>
     <a href="https://developer.apple.com/swift/" target="_blank">
-        <img src="https://img.shields.io/badge/Platforms-OS%20X%20%7C%20Linux%20-lightgray.svg?style=flat" alt="Platforms OS X | Linux">
+        <img src="https://img.shields.io/badge/Platforms-macOS%2026%2B-lightgray.svg?style=flat" alt="Platforms macOS 26+">
     </a>
-    <a href="http://perfect.org/licensing.html" target="_blank">
+    <a href="LICENSE" target="_blank">
         <img src="https://img.shields.io/badge/License-Apache-lightgrey.svg?style=flat" alt="License Apache">
     </a>
     <a href="http://twitter.com/PerfectlySoft" target="_blank">
@@ -41,14 +41,20 @@
 
 Perfect Zip utility
 
-This Perfect module wraps the minizip C library and provides simple zip and unzip functionality.
+This is a Swift 6.2 / macOS 26 resurrection of the original PerfectlySoft `Perfect-Zip` package, maintained in the [Perfect-Resurrection](https://github.com/taplin/Perfect-Resurrection) effort. The social/community badges above (get-involved banner, GitHub star, Stack Overflow, Twitter, Slack) still point at the original, long-dormant PerfectlySoft project rather than this fork — they're kept for attribution, not as an indication of where to file issues against this repo.
+
+This module is a thin Swift wrapper around a vendored copy of the `minizip` C library (including its AES source, linked against system `zlib`) that provides simple zip and unzip functionality: create an archive from a set of paths, or extract an archive to a destination, both with optional password support. `Zip`, `ZipStatus`, and `ProcessedFilePath` are all `Sendable`, and the `PerfectZip` target builds under Swift 6 language mode (strict concurrency); there is no async/await API surface yet, all operations are synchronous, blocking file I/O.
+
+**Requirements:** Swift 6.2 toolchain, macOS 26 or later. The package has no external SwiftPM dependencies — everything it needs (the vendored `minizip`/AES sources and the system `zlib` link) is built in-tree.
+
+**Integration status:** Perfect-Zip is currently a standalone library — no other package in Perfect-Resurrection (including Perfect-Lasso) depends on it yet. It isn't deprecated or abandoned, just not yet wired into a consumer.
 
 ## Including in your project
 
-Add this project as a dependency in your Package.swift file.
+Add this project as a dependency in your Package.swift file, then add `"PerfectZip"` to your target's `dependencies`.
 
 ``` swift
-.Package(url: "https://github.com/PerfectlySoft/Perfect-Zip.git", majorVersion: 3)
+.package(url: "https://github.com/taplin/Perfect-Zip.git", from: "1.0.0")
 ```
 
 ## Running
