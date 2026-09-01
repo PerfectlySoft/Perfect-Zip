@@ -1,376 +1,141 @@
-//
-//  PerfectZipTests.swift
-//  PerfectZip
-//
-//  Created by Jonathan Guthrie on 2016-07-28.
-//	Copyright (C) 2016 PerfectlySoft, Inc.
-//
-//===----------------------------------------------------------------------===//
-//
-// This source file is part of the Perfect.org open source project
-//
-// Copyright (c) 2015 - 2016 PerfectlySoft Inc. and the Perfect project authors
-// Licensed under Apache License v2.0
-//
-// See http://perfect.org/licensing.html for license information
-//
-//===----------------------------------------------------------------------===//
-//
-
-
-import XCTest
-import PerfectLib
+import Testing
+import Foundation
 @testable import PerfectZip
-import minizip
 
-class PerfectZipTests: XCTestCase {
-	public var workingDir = ""
+@Suite(.serialized)
+struct PerfectZipTests {
 
-	override func setUp() {
-		super.setUp()
-		// setup code. called before the invocation of each test method in the class.
+    // MARK: - Setup helpers
 
-		self.workingDir = Dir.workingDir.path
+    private func makeTempDir() throws -> (root: URL, toZip: URL, zip: String, dest: String) {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("PerfectZipTests_\(UUID().uuidString)")
+        let toZip = root.appendingPathComponent("toZip")
+        let internal_ = toZip.appendingPathComponent("internal")
 
-		// create internal working dir for tests
-		let workingTestDir = Dir("testDirectories")
-		do {
-			try workingTestDir.create()
-			try workingTestDir.setAsWorkingDir()
-		} catch {
-			XCTFail()
-		}
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try fm.createDirectory(at: toZip, withIntermediateDirectories: true)
+        try fm.createDirectory(at: internal_, withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent("isEmpty"), withIntermediateDirectories: true)
 
-		// Create zip directory for zip tests
-		let zipDir = Dir("toZip")
-		do {
-			try zipDir.create()
-		} catch {
-			XCTFail()
-		}
-		let zipDirInternal = Dir("toZip/internal")
-		do {
-			try zipDirInternal.create()
-		} catch {
-			XCTFail()
-		}
+        let txt1 = "Dvd pegacorn perfect storms darling I'm a nightmare dressed like a daydream."
+        let txt2 = "Forever everybody here burning it down. Shellback drunk on jealousy deep cut."
 
-		// create empty dir for tests
-		let zipDirEmpty = Dir("isEmpty")
-		do {
-			try zipDirEmpty.create()
-		} catch {
-			XCTFail()
-		}
+        try txt1.write(to: toZip.appendingPathComponent("txt1.txt"), atomically: true, encoding: .utf8)
+        try txt2.write(to: internal_.appendingPathComponent("txt2.txt"), atomically: true, encoding: .utf8)
 
-		// create files for zip testing
-		let txtFile1 = File("toZip/txt1.txt")
-		do {
-			try txtFile1.open(.truncate)
-			defer {
-				txtFile1.close()
-			}
-			try txtFile1.write(string: "Dvd pegacorn perfect storms darling I'm a. Nightmare dressed like a daydream 13 Management. 13 Management rosy cheeks a boatload. Rabbit hole haters gonna hate wildest dreams Lily Aldridge burn. Out pictures of you so. Basically Country Music Hall of Fame cherry lips. Castle mean Law & Order SVU dvd king Christmas vultures. Pretty lies moonman burn out write a song. About burning it down rose garden necklace Emma Stone. For me I think red baking silent screams. I know places day dream welcome to new york. Alive back from the dead discovered. Bulletproof cozy vultures rose garden Kanye. Pop king no headlights sun came up we both went. Mad wonderland cats refrigerator light tight little skirt trains no headlights. Cat stickers bad guys reckless cat stickers dvd players gonna.")
-		} catch {
-			XCTFail()
-		}
+        let zipPath = root.appendingPathComponent("testZip1.zip").path
+        let destPath = root.appendingPathComponent("somewhere").path
+        return (root, toZip, zipPath, destPath)
+    }
 
-		let txtFile2 = File("toZip/internal/txt2.txt")
-		do {
-			try txtFile2.open(.truncate)
-			defer {
-				txtFile2.close()
-			}
-			try txtFile2.write(string: "Forever everybody here burning it down. Shellback drunk on jealousy deep cut. Diet Coke heaven sink ships butterflies. National anthem permanent mark darling I'm a nightmare. Dressed like a daydream players gonna play girls and girls. Harry Styles flames pumpkin spice you look like Watch.")
-		} catch {
-			XCTFail()
-		}
+    private func listPaths(in dir: URL) -> Set<String> {
+        let paths = (try? FileManager.default.subpathsOfDirectory(atPath: dir.path)) ?? []
+        return Set(paths.filter { !$0.hasSuffix(".DS_Store") && !$0.hasPrefix("__MACOSX") })
+    }
 
-	}
-	override func tearDown() {
-		// teardown code. called after the invocation of each test method in the class.
-		super.tearDown()
-		let resetWorkingDir = Dir(self.workingDir)
-		do {
-			try resetWorkingDir.setAsWorkingDir()
-		} catch {}
+    // MARK: - Zip tests
 
-		let workingTestDir = Dir("testDirectories")
+    @Test func createWithBadPath() throws {
+        let (root, _, _, _) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
 
-		do {
-			self.deleteRecursive(workingTestDir, path: "testDirectories")
-			try workingTestDir.delete()
-		} catch {
-			print(error)
-			XCTFail()
-		}
+        let result = Zip().zipFiles(
+            paths: [root.appendingPathComponent("doesNotExist").path],
+            zipFilePath: root.appendingPathComponent("out.zip").path,
+            overwrite: true, password: ""
+        )
+        #expect(result == .FileNotFound)
+    }
 
-	}
-	func deleteRecursive(_ dir:Dir, path: String){
-		do {
-			try dir.forEachEntry(closure: {
-				n in
-				let npath = path + "/"
-				let thisFile = File(npath + n)
-				if thisFile.isDir {
-					let thisDir = Dir(npath + n)
-					self.deleteRecursive(thisDir, path: npath + n)
-					do {
-						try thisDir.delete()
-					} catch {
-						print(error)
-					}
-				} else {
-					thisFile.delete()
-				}
-			})
-		} catch {
-			print(error)
-		}
-	}
+    @Test func createWithBadZipName() throws {
+        let (root, _, _, _) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
 
-	func setWorkingDir() {
-		let resetWorkingDir = Dir(self.workingDir)
-		do {
-			try resetWorkingDir.setAsWorkingDir()
-		} catch {}
-	}
-/*
-	tests:
+        let result = Zip().zipFiles(
+            paths: [root.appendingPathComponent("doesNotExist").path],
+            zipFilePath: root.appendingPathComponent("testZip1").path, // no .zip
+            overwrite: true, password: ""
+        )
+        #expect(result == .ZipFail)
+    }
 
-	create zip
-	X with bad source
-	X with bad filename (dest)
-	X with overwrite off (to fail)
-	X with overwrite on (to pass)
-	X all good (covered by the above)
-*/
+    @Test func createOverwriteOff() throws {
+        let (root, toZip, zipPath, _) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
 
-	// feeds deliberate bad path to zip.
-	// should fail with .FileNotFound
-	func testCreateWithBadPath() {
-		setWorkingDir()
-		let zippy = Zip()
+        let first = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        #expect(first == .ZipSuccess, "\(first.description)")
 
-		let sourceDir = "testDirectories/doesNotExist"
-		let destinationZip = "testDirectories/testZip1.zip"
+        let second = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: false, password: "")
+        #expect(second == .ZipCannotOverwrite, "\(second.description)")
+    }
 
-		let ZipResult = zippy.zipFiles(paths: [sourceDir], zipFilePath: destinationZip, overwrite: true, password: "")
-		XCTAssert(ZipResult == .FileNotFound)
-		
-	}
+    @Test func createOverwriteOn() throws {
+        let (root, toZip, zipPath, _) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
 
-	// tries to create zip file without the .zip extension. immediate fail
-	func testCreateWithBadZipName() {
-		setWorkingDir()
-		let zippy = Zip()
+        let first = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        #expect(first == .ZipSuccess, "\(first.description)")
 
-		let sourceDir = "testDirectories/doesNotExist"
-		let destinationZip = "testDirectories/testZip1"
+        let second = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        #expect(second == .ZipSuccess, "\(second.description)")
+    }
 
-		let ZipResult = zippy.zipFiles(paths: [sourceDir], zipFilePath: destinationZip, overwrite: true, password: "")
-		XCTAssert(ZipResult == .ZipFail)
+    // MARK: - Unzip tests
 
-	}
+    @Test func unzipWithBadPath() throws {
+        let (root, _, _, dest) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
 
-	// create zip, then try to overwrite with flag to false.
-	func testCreateOverwriteOff() {
-		setWorkingDir()
+        let result = Zip().unzipFile(
+            source: root.appendingPathComponent("doesNotExist.zip").path,
+            destination: dest, overwrite: true
+        )
+        #expect(result == .FileNotFound)
+    }
 
-		let sourceDir = "testDirectories/toZip"
-		let destinationZip = "testDirectories/testZip1.zip"
+    @Test func unzipOverwriteOff() throws {
+        let (root, toZip, zipPath, dest) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
 
-		// create file that we are going to try to overwrite
-		let zippy = Zip()
-		let ZipResult = zippy.zipFiles(paths: [sourceDir], zipFilePath: destinationZip, overwrite: true, password: "")
-		XCTAssert(ZipResult == .ZipSuccess, ZipResult.description)
+        try FileManager.default.createDirectory(atPath: dest, withIntermediateDirectories: true)
 
-		// test to make sure it has failed
-		let zippyTest = Zip()
-		let ZipResultTest = zippyTest.zipFiles(paths: [sourceDir], zipFilePath: destinationZip, overwrite: false, password: "")
-		XCTAssert(ZipResultTest == .ZipCannotOverwrite, ZipResultTest.description)
-		
-	}
+        let zipResult = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        #expect(zipResult == .ZipSuccess, "\(zipResult.description)")
 
-	// create zip, then try to overwrite with flag true
-	func testCreateOverwriteOn() {
-		setWorkingDir()
+        let unzipResult = Zip().unzipFile(source: zipPath, destination: dest, overwrite: false)
+        #expect(unzipResult == .ZipCannotOverwrite, "\(unzipResult.description)")
+    }
 
-		let sourceDir = "testDirectories/toZip"
-		let destinationZip = "testDirectories/testZip1.zip"
+    @Test func unzipOverwriteOn() throws {
+        let (root, toZip, zipPath, dest) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
 
-		// create file that we are going to try to overwrite
-		let zippy = Zip()
-		let ZipResult = zippy.zipFiles(paths: [sourceDir], zipFilePath: destinationZip, overwrite: true, password: "")
-		XCTAssert(ZipResult == .ZipSuccess, ZipResult.description)
+        try FileManager.default.createDirectory(atPath: dest, withIntermediateDirectories: true)
 
-		// test to make sure it has failed
-		let zippyTest = Zip()
-		let ZipResultTest = zippyTest.zipFiles(paths: [sourceDir], zipFilePath: destinationZip, overwrite: true, password: "")
-		XCTAssert(ZipResultTest == .ZipSuccess, ZipResultTest.description)
-		
-	}
+        let zipResult = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        #expect(zipResult == .ZipSuccess, "\(zipResult.description)")
 
-	/*
-	tests:
+        let unzipResult = Zip().unzipFile(source: zipPath, destination: dest, overwrite: true)
+        #expect(unzipResult == .ZipSuccess, "\(unzipResult.description)")
+    }
 
-	unzip
-	X with bad filename (source)
-	X with overwrite off (to fail)
-	X with overwrite on (to pass)
-	- all good, then compare with specific contents from setup
-	*/
+    @Test func unzipCompare() throws {
+        let (root, toZip, zipPath, dest) = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
 
+        let zipResult = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        #expect(zipResult == .ZipSuccess, "\(zipResult.description)")
 
-	// feeds deliberate bad path to zip.
-	// should fail with .FileNotFound
-	func testUnzipWithBadPath() {
-		setWorkingDir()
-		let zippy = Zip()
+        let unzipResult = Zip().unzipFile(source: zipPath, destination: dest, overwrite: true)
+        #expect(unzipResult == .ZipSuccess, "\(unzipResult.description)")
 
-		let sourceZip = "testDirectories/doesNotExist.zip"
-		let destinationDir = "testDirectories/somewhere"
+        // The zip archive contains a "toZip/" prefix from processZipPaths, so unzipped tree is dest/toZip/
+        let destToZip = URL(fileURLWithPath: dest).appendingPathComponent("toZip")
+        let sourcePaths = listPaths(in: toZip)
+        let destPaths   = listPaths(in: destToZip)
 
-		let UnZipResult = zippy.unzipFile(source: sourceZip, destination: destinationDir, overwrite: true)
-		XCTAssert(UnZipResult == .FileNotFound)
-
-	}
-	
-	// creates a zip.
-	// tries to unzip to an already existing location, should not be able to
-	func testUnzipWithOverwriteOff() {
-		setWorkingDir()
-
-		let sourceZip = "testDirectories/testZip1.zip"
-		let destinationDir = "testDirectories/somewhere"
-
-		// create the dest dir so it would be "locked" out if overwrite off
-		let lockDir = Dir(destinationDir)
-		do {
-			try lockDir.create()
-		} catch {
-			XCTAssert(false,"Could not create the directory for testUnzipWithOverwriteOff test")
-		}
-
-
-		// create file that we are going to try to extract
-		let sourceDir = "testDirectories/toZip"
-		let destinationZip = "testDirectories/testZip1.zip"
-		let zippy = Zip()
-		let ZipResult = zippy.zipFiles(paths: [sourceDir], zipFilePath: destinationZip, overwrite: true, password: "")
-		XCTAssert(ZipResult == .ZipSuccess, ZipResult.description)
-
-
-		let unZippy = Zip()
-		let UnZipResult = unZippy.unzipFile(source: sourceZip, destination: destinationDir, overwrite: false)
-		XCTAssert(UnZipResult == .ZipCannotOverwrite, UnZipResult.description)
-		
-	}
-
-
-	// creates a zip.
-	// tries to unzip to an already existing location, should be able to
-	func testUnzipWithOverwriteOn() {
-		setWorkingDir()
-
-		let sourceZip = "testDirectories/testZip1.zip"
-		let destinationDir = "testDirectories/somewhere"
-
-		// create the dest dir so it would be "locked" out if overwrite off
-		let lockDir = Dir(destinationDir)
-		do {
-			try lockDir.create()
-		} catch {
-			XCTAssert(false,"Could not create the directory for testUnzipWithOverwriteOff test")
-		}
-
-
-		// create file that we are going to try to extract
-		let sourceDir = "testDirectories/toZip"
-		let destinationZip = "testDirectories/testZip1.zip"
-		let zippy = Zip()
-		let ZipResult = zippy.zipFiles(paths: [sourceDir], zipFilePath: destinationZip, overwrite: true, password: "")
-		XCTAssert(ZipResult == .ZipSuccess, ZipResult.description)
-
-
-		let unZippy = Zip()
-		let UnZipResult = unZippy.unzipFile(source: sourceZip, destination: destinationDir, overwrite: true)
-		XCTAssert(UnZipResult == .ZipSuccess, UnZipResult.description)
-		
-	}
-	
-	// create zip, unzip and compare contents
-	func testUnzipCompare() {
-		setWorkingDir()
-
-		// create file that we are going to try to extract
-		let sourceDir = "testDirectories/toZip"
-		let destinationZip = "testDirectories/testZip1.zip"
-		let zippy = Zip()
-		let ZipResult = zippy.zipFiles(paths: [sourceDir], zipFilePath: destinationZip, overwrite: true, password: "")
-		XCTAssert(ZipResult == .ZipSuccess, ZipResult.description)
-
-		// unzip
-		let sourceZip = "testDirectories/testZip1.zip"
-		let destinationDir = "testDirectories/somewhere"
-		let unZippy = Zip()
-		let UnZipResult = unZippy.unzipFile(source: sourceZip, destination: destinationDir, overwrite: true)
-		XCTAssert(UnZipResult == .ZipSuccess, UnZipResult.description)
-
-		// make arrays of files and directories
-		setWorkingDir()
-		let sourceDirDir = Dir(sourceDir)
-		let destinationDirDir = Dir(destinationDir+"/toZip")
-
-		let sourceDirArray = self.listRecursive(sourceDirDir, path: sourceDir, truncate: sourceDir)
-		let destinationDirArray = self.listRecursive(destinationDirDir, path: destinationDir+"/toZip", truncate: destinationDir+"/toZip")
-
-		XCTAssert(sourceDirArray == destinationDirArray, "Input and output contents of source and unzip do not match")
-	}
-	
-	func listRecursive(_ dir:Dir, path: String, truncate: String) -> [String] {
-		var arr = [String]()
-		do {
-			try dir.forEachEntry(closure: {
-				n in
-				if n.hasSuffix(".DS_Store") {
-					return
-				}
-
-				let npath = path + "/"
-				var compiledPath = npath + n
-				compiledPath = compiledPath.stringByReplacing(string: "//", withString: "/")
-				let truncatedPath = compiledPath.stringByReplacing(string: truncate, withString: "")
-				let thisFile = File(compiledPath)
-
-				if thisFile.isDir {
-					let thisDir = Dir(compiledPath)
-					arr.append(truncatedPath)
-					let narray = self.listRecursive(thisDir, path: compiledPath, truncate: truncate)
-					arr += narray
-				} else {
-					arr.append(truncatedPath)
-				}
-			})
-		} catch {
-			print("dir error (\(dir.path)): \(error)")
-		}
-		return arr
-	}
-
-
-
-	static var allTests : [(String, (PerfectZipTests) -> () throws -> Void)] {
-		return [
-			("testCreateWithBadPath", testCreateWithBadPath),
-			("testCreateWithBadZipName", testCreateWithBadZipName),
-			("testCreateOverwriteOff", testCreateOverwriteOff),
-			("testCreateOverwriteOn", testCreateOverwriteOn),
-			("testUnzipWithBadPath", testUnzipWithBadPath),
-			("testUnzipWithOverwriteOff", testUnzipWithOverwriteOff),
-			("testUnzipWithOverwriteOn", testUnzipWithOverwriteOn),
-			("testUnzipCompare", testUnzipCompare)
-		]
-	}
+        #expect(sourcePaths == destPaths, "Source and unzipped file lists differ: \(sourcePaths.symmetricDifference(destPaths))")
+    }
 }
-
