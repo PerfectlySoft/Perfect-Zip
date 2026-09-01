@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "PerfectZip",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v12)],
     products: [
         .library(name: "PerfectZip", targets: ["PerfectZip", "minizip"]),
     ],
