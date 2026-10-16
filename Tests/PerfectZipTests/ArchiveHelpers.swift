@@ -116,6 +116,12 @@ func run(_ tool: String, _ args: [String], cwd: String? = nil) -> (status: Int32
     p.executableURL = URL(fileURLWithPath: exe)
     p.arguments = args
     if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    #if os(Linux)
+    // Info-ZIP on Linux mangles non-ASCII names (`#U0301`) unless the locale is UTF-8.
+    var environment = ProcessInfo.processInfo.environment
+    environment["LC_ALL"] = "C.UTF-8"
+    p.environment = environment
+    #endif
     let pipe = Pipe()
     p.standardOutput = pipe
     p.standardError = pipe

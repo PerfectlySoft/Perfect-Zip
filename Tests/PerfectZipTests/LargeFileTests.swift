@@ -32,7 +32,7 @@ struct LargeFileTests {
         let path = scratch.sub("src/big.bin")
         let size: UInt64 = 5 << 30
         // Sparse 5 GiB with random 1 MiB islands, including one straddling the 4 GiB mark.
-        FileManager.default.createFile(atPath: path, contents: nil)
+        _ = FileManager.default.createFile(atPath: path, contents: nil)
         let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
         for offset: UInt64 in [0, 1 << 30, (4 << 30) - (1 << 19), size - (1 << 20)] {
             try handle.seek(toOffset: offset)
