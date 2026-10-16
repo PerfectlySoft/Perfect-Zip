@@ -43,7 +43,7 @@ struct PerfectZipTests {
         let result = Zip().zipFiles(
             paths: [root.appendingPathComponent("doesNotExist").path],
             zipFilePath: root.appendingPathComponent("out.zip").path,
-            overwrite: true, password: ""
+            overwrite: true
         )
         #expect(result == .FileNotFound)
     }
@@ -55,7 +55,7 @@ struct PerfectZipTests {
         let result = Zip().zipFiles(
             paths: [root.appendingPathComponent("doesNotExist").path],
             zipFilePath: root.appendingPathComponent("testZip1").path, // no .zip
-            overwrite: true, password: ""
+            overwrite: true
         )
         #expect(result == .ZipFail)
     }
@@ -64,10 +64,10 @@ struct PerfectZipTests {
         let (root, toZip, zipPath, _) = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let first = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        let first = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true)
         #expect(first == .ZipSuccess, "\(first.description)")
 
-        let second = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: false, password: "")
+        let second = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: false)
         #expect(second == .ZipCannotOverwrite, "\(second.description)")
     }
 
@@ -75,10 +75,10 @@ struct PerfectZipTests {
         let (root, toZip, zipPath, _) = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let first = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        let first = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true)
         #expect(first == .ZipSuccess, "\(first.description)")
 
-        let second = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        let second = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true)
         #expect(second == .ZipSuccess, "\(second.description)")
     }
 
@@ -101,7 +101,7 @@ struct PerfectZipTests {
 
         try FileManager.default.createDirectory(atPath: dest, withIntermediateDirectories: true)
 
-        let zipResult = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        let zipResult = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true)
         #expect(zipResult == .ZipSuccess, "\(zipResult.description)")
 
         let unzipResult = Zip().unzipFile(source: zipPath, destination: dest, overwrite: false)
@@ -114,7 +114,7 @@ struct PerfectZipTests {
 
         try FileManager.default.createDirectory(atPath: dest, withIntermediateDirectories: true)
 
-        let zipResult = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        let zipResult = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true)
         #expect(zipResult == .ZipSuccess, "\(zipResult.description)")
 
         let unzipResult = Zip().unzipFile(source: zipPath, destination: dest, overwrite: true)
@@ -125,7 +125,7 @@ struct PerfectZipTests {
         let (root, toZip, zipPath, dest) = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let zipResult = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true, password: "")
+        let zipResult = Zip().zipFiles(paths: [toZip.path], zipFilePath: zipPath, overwrite: true)
         #expect(zipResult == .ZipSuccess, "\(zipResult.description)")
 
         let unzipResult = Zip().unzipFile(source: zipPath, destination: dest, overwrite: true)

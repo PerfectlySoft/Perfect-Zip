@@ -1,5 +1,0 @@
-module minizip {
-    header "unzip.h"
-    header "zip.h"
-    export *
-}

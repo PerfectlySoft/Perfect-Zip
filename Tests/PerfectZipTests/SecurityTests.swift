@@ -40,12 +40,18 @@ import Foundation
 
     @Test func rejectsEmbeddedNUL() throws {
         let scratch = try Scratch()
-        try makeArchive(at: scratch.sub("evil.zip"), [RawEntry(name: "safe.txtXsh", contents: "x")])
-        try patchBytes(scratch.sub("evil.zip"), find: Array("safe.txtXsh".utf8), replace: Array("safe.txt\0sh".utf8))
-        #expect(try entryNames(of: scratch.sub("evil.zip")) == ["safe.txt\0sh"])
+        try makeArchive(at: scratch.sub("evil.zip"), [RawEntry(nameBytes: Array("safe.txt\0.sh".utf8), contents: [1])])
+        #expect(try entryNames(of: scratch.sub("evil.zip")) == ["safe.txt\0.sh"])
         let status = Zip().unzipFile(source: scratch.sub("evil.zip"), destination: scratch.sub("dest"), overwrite: true)
         #expect(status == .UnzipUnsafePath)
         #expect(!FileManager.default.fileExists(atPath: scratch.sub("dest")))
+    }
+
+    /// With the UTF-8 flag set, invalid UTF-8 is refused rather than guessed at.
+    @Test func rejectsInvalidUTF8WithFlag() throws {
+        let scratch = try Scratch()
+        try makeArchive(at: scratch.sub("bad.zip"), [RawEntry(nameBytes: [0x61, 0xFF, 0x62], contents: [1], utf8Flag: true)])
+        #expect(Zip().unzipFile(source: scratch.sub("bad.zip"), destination: scratch.sub("dest"), overwrite: true) == .UnzipUnsafePath)
     }
 
     @Test func rejectsEmptyName() throws {
@@ -124,7 +130,7 @@ import Foundation
         try scratch.write("tree/sub/f.txt", "f")
         // `tree/sub/..` used to become entries named `../...`.
         let status = Zip().zipFiles(paths: [scratch.sub("tree/sub/..")], zipFilePath: scratch.sub("a.zip"),
-                                    overwrite: true, password: nil)
+                                    overwrite: true)
         #expect(status == .ZipSuccess)
         let names = try entryNames(of: scratch.sub("a.zip"))
         #expect(names == ["tree/", "tree/sub/", "tree/sub/f.txt"])
@@ -143,7 +149,7 @@ import Foundation
         try FileManager.default.createSymbolicLink(atPath: scratch.sub("tree/keylink"), withDestinationPath: scratch.sub("secret/key.txt"))
         try FileManager.default.createSymbolicLink(atPath: scratch.sub("tree/loop"), withDestinationPath: scratch.sub("tree"))
 
-        let status = Zip().zipFiles(paths: [scratch.sub("tree")], zipFilePath: scratch.sub("a.zip"), overwrite: true, password: nil)
+        let status = Zip().zipFiles(paths: [scratch.sub("tree")], zipFilePath: scratch.sub("a.zip"), overwrite: true)
         #expect(status == .ZipSuccess)
         #expect(try entryNames(of: scratch.sub("a.zip")) == ["tree/", "tree/f.txt"])
     }
@@ -153,7 +159,7 @@ import Foundation
         try scratch.makeDirectory("real")
         try scratch.write("real/f.txt", "f")
         try FileManager.default.createSymbolicLink(atPath: scratch.sub("alias"), withDestinationPath: scratch.sub("real"))
-        let status = Zip().zipFiles(paths: [scratch.sub("alias")], zipFilePath: scratch.sub("a.zip"), overwrite: true, password: nil)
+        let status = Zip().zipFiles(paths: [scratch.sub("alias")], zipFilePath: scratch.sub("a.zip"), overwrite: true)
         #expect(status == .ZipSuccess)
         #expect(try entryNames(of: scratch.sub("a.zip")) == ["alias/", "alias/f.txt"])
     }

@@ -1,5 +1,5 @@
 import Foundation
-import minizip
+@testable import PerfectZip
 
 /// A scratch directory removed when the value is released.
 final class Scratch {
@@ -26,8 +26,16 @@ final class Scratch {
         try Data(text.utf8).write(to: URL(fileURLWithPath: sub(name)))
     }
 
+    func writeBytes(_ name: String, _ bytes: [UInt8]) throws {
+        try Data(bytes).write(to: URL(fileURLWithPath: sub(name)))
+    }
+
     func read(_ name: String) -> String? {
         FileManager.default.contents(atPath: sub(name)).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    func bytes(_ name: String) throws -> [UInt8] {
+        [UInt8](try Data(contentsOf: URL(fileURLWithPath: sub(name))))
     }
 
     /// Every path below the scratch directory, relative to it.
@@ -36,75 +44,94 @@ final class Scratch {
     }
 }
 
-/// An entry for ``makeArchive(at:_:)``, written with minizip's own zip API so names can be
-/// anything an attacker could put in an archive.
+/// An entry for ``makeArchive(at:_:)``. The archive is written by PerfectZip's internal
+/// writer, which takes the name as raw bytes, so tests can plant any name an attacker could.
 struct RawEntry {
-    var name: String
-    var contents: String = ""
-    /// Unix `st_mode` to store in the external attributes (with a Unix "version made by").
+    var nameBytes: [UInt8]
+    var contents: [UInt8] = []
+    /// Unix `st_mode` to store in the external attributes.
     var unixMode: UInt32? = nil
-}
+    var isDirectory = false
+    var style: ArchiveWriter.SizeStyle = .patched
+    var utf8Flag: Bool? = nil
 
-enum ArchiveError: Error { case failed(String) }
+    init(name: String, contents: String = "", unixMode: UInt32? = nil,
+         style: ArchiveWriter.SizeStyle = .patched) {
+        self.nameBytes = Array(name.utf8)
+        self.contents = Array(contents.utf8)
+        self.unixMode = unixMode
+        self.isDirectory = name.hasSuffix("/")
+        self.style = style
+    }
+
+    init(nameBytes: [UInt8], contents: [UInt8] = [], utf8Flag: Bool? = nil) {
+        self.nameBytes = nameBytes
+        self.contents = contents
+        self.utf8Flag = utf8Flag
+    }
+}
 
 func makeArchive(at path: String, _ entries: [RawEntry]) throws {
-    guard let zip = zipOpen64(path, APPEND_STATUS_CREATE) else { throw ArchiveError.failed("open") }
+    let writer = try ArchiveWriter(path: path)
     for entry in entries {
-        var info = zip_fileinfo(tmz_date: tm_zip(tm_sec: 0, tm_min: 0, tm_hour: 12, tm_mday: 1, tm_mon: 0, tm_year: 2024),
-                                dosDate: 0, internal_fa: 0,
-                                external_fa: entry.unixMode.map { UInt($0) << 16 } ?? 0)
-        let madeBy: UInt = entry.unixMode == nil ? 0 : 0x031E
-        guard zipOpenNewFileInZip4_64(zip, entry.name, &info, nil, 0, nil, 0, nil,
-                                      Z_DEFLATED, Z_DEFAULT_COMPRESSION, 0, -MAX_WBITS, DEF_MEM_LEVEL,
-                                      Z_DEFAULT_STRATEGY, nil, 0, madeBy, 0, 0) == ZIP_OK else {
-            throw ArchiveError.failed("entry \(entry.name)")
-        }
-        let bytes = Array(entry.contents.utf8)
-        if !bytes.isEmpty {
-            guard zipWriteInFileInZip(zip, bytes, UInt32(bytes.count)) == ZIP_OK else {
-                throw ArchiveError.failed("write")
-            }
-        }
-        guard zipCloseFileInZip(zip) == ZIP_OK else { throw ArchiveError.failed("close entry") }
+        var offset = 0
+        let data = entry.contents
+        try writer.add(name: entry.nameBytes, isDirectory: entry.isDirectory, unixMode: entry.unixMode,
+                       modified: 1_704_110_400, sizeHint: UInt64(data.count), style: entry.style,
+                       utf8Flag: entry.utf8Flag,
+                       source: entry.isDirectory ? nil : { buffer, size in
+                           let n = min(size, data.count - offset)
+                           data.withUnsafeBytes { buffer.copyMemory(from: $0.baseAddress! + offset, byteCount: n) }
+                           offset += n
+                           return n
+                       })
     }
-    guard zipClose(zip, nil) == ZIP_OK else { throw ArchiveError.failed("close") }
+    try writer.finish()
 }
 
-/// The entry names in an archive, in order, read with minizip's unzip API.
-func entryNames(of path: String) throws -> [String] {
-    guard let zip = unzOpen64(path) else { throw ArchiveError.failed("unzOpen") }
-    defer { unzClose(zip) }
-    var names = [String]()
-    var ret = unzGoToFirstFile(zip)
-    while ret == UNZ_OK {
-        var info = unz_file_info64()
-        var buf = [CChar](repeating: 0, count: 65537)
-        guard unzGetCurrentFileInfo64(zip, &info, &buf, UInt(buf.count - 1), nil, 0, nil, 0) == UNZ_OK else {
-            throw ArchiveError.failed("info")
-        }
-        names.append(String(decoding: buf.prefix(Int(info.size_filename)).map { UInt8(bitPattern: $0) }, as: UTF8.self))
-        ret = unzGoToNextFile(zip)
-    }
-    guard ret == UNZ_END_OF_LIST_OF_FILE else { throw ArchiveError.failed("walk") }
-    return names
+/// The decoded entry names of an archive, in order, read with PerfectZip's reader.
+func entryNames(of path: String, limits: ZipLimits = .unlimited) throws -> [String] {
+    try ArchiveReader(path: path).entries(limits: limits).map { $0.name ?? "<invalid>" }
 }
 
-/// Replaces every occurrence of `find` with `replace` (same length) in the file's bytes; used to
-/// plant names minizip's C-string API cannot express, such as an embedded NUL.
-func patchBytes(_ path: String, find: [UInt8], replace: [UInt8]) throws {
-    precondition(find.count == replace.count)
-    var data = [UInt8](try Data(contentsOf: URL(fileURLWithPath: path)))
-    var i = 0
-    var hits = 0
-    while i + find.count <= data.count {
-        if Array(data[i..<i + find.count]) == find {
-            data.replaceSubrange(i..<i + find.count, with: replace)
-            hits += 1
-            i += find.count
-        } else {
-            i += 1
-        }
+/// Offset of the first occurrence of `pattern` at or after `from`.
+func find(_ pattern: [UInt8], in bytes: [UInt8], from: Int = 0) -> Int? {
+    guard bytes.count >= pattern.count else { return nil }
+    var i = from
+    while i + pattern.count <= bytes.count {
+        if bytes[i] == pattern[0] && Array(bytes[i..<i + pattern.count]) == pattern { return i }
+        i += 1
     }
-    guard hits > 0 else { throw ArchiveError.failed("pattern not found") }
-    try Data(data).write(to: URL(fileURLWithPath: path))
+    return nil
 }
+
+func le32(_ v: UInt32) -> [UInt8] { (0..<4).map { UInt8(truncatingIfNeeded: v >> (8 * $0)) } }
+
+/// Runs a tool and returns its exit status and combined output. nil if it is not installed.
+@discardableResult
+func run(_ tool: String, _ args: [String], cwd: String? = nil) -> (status: Int32, output: String)? {
+    let candidates = tool.hasPrefix("/") ? [tool] : ["/usr/bin/\(tool)", "/bin/\(tool)", "/usr/local/bin/\(tool)", "/opt/homebrew/bin/\(tool)"]
+    guard let exe = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return nil }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: exe)
+    p.arguments = args
+    if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = pipe
+    do { try p.run() } catch { return nil }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    return (p.terminationStatus, String(decoding: data, as: UTF8.self))
+}
+
+func toolExists(_ tool: String) -> Bool {
+    ["/usr/bin/\(tool)", "/bin/\(tool)", "/usr/local/bin/\(tool)", "/opt/homebrew/bin/\(tool)"]
+        .contains { FileManager.default.isExecutableFile(atPath: $0) }
+}
+
+/// `deflated.txt` (1800 bytes) and `stored.txt` ("stored secret\n"), encrypted by Info-ZIP
+/// `zip -P 'pässword'` (ZipCrypto, with data descriptors), dated 2024-01-02 12:30 UTC.
+let zipCryptoFixture = Data(base64Encoded: """
+UEsDBBQACQAIAMAzIljmw5VkSgAAAAgHAAAMAAAAZGVmbGF0ZWQudHh0pcX3wNQI9ZUN3Gv/XZiQstb8phRiHpng40JZsLrKlSW4s7VRqbFygpuDevGhGiMG8imfb929aCPfqXJFIAzsAAX6Xfni1FsacVhQSwcI5sOVZEoAAAAIBwAAUEsDBAoACQAAAMAzIlg48cBxGgAAAA4AAAAKAAAAc3RvcmVkLnR4dCmf++C2+NWfHjVI6w+MejN+cXFrAcIiT2R9UEsHCDjxwHEaAAAADgAAAFBLAQIeAxQACQAIAMAzIljmw5VkSgAAAAgHAAAMAAAAAAAAAAEAAACkgQAAAABkZWZsYXRlZC50eHRQSwECHgMKAAkAAADAMyJYOPHAcRoAAAAOAAAACgAAAAAAAAAAAAAApIGEAAAAc3RvcmVkLnR4dFBLBQYAAAAAAgACAHIAAADWAAAAAAA=
+""".replacingOccurrences(of: "\n", with: ""))!

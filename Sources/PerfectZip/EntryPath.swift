@@ -12,15 +12,18 @@ enum EntryPath: Equatable, Sendable {
     /// placed inside the destination. Extraction stops with ``ZipStatus/UnzipUnsafePath``.
     case unsafe
 
-    /// Checks a raw entry name from the archive's central directory.
+    /// Checks raw name bytes, decoded as ``NameEncoding`` does without the UTF-8 flag.
+    static func validate(_ raw: some Collection<UInt8>) -> EntryPath {
+        NameEncoding.decode(Array(raw), utf8Flag: false).map(validate) ?? .unsafe
+    }
+
+    /// Checks a decoded entry name from the archive's central directory.
     ///
     /// Backslashes are treated as path separators (archives made on Windows use them), so
     /// `..\x` is caught the same way as `../x`. Empty and `.` components are dropped.
-    static func validate(_ raw: some Collection<UInt8>) -> EntryPath {
-        guard !raw.isEmpty, !raw.contains(0) else { return .unsafe }
-
-        let name = String(decoding: raw, as: UTF8.self)
-            .replacingOccurrences(of: "\\", with: "/")
+    static func validate(_ decoded: String) -> EntryPath {
+        guard !decoded.isEmpty, !decoded.unicodeScalars.contains("\0") else { return .unsafe }
+        let name = decoded.replacingOccurrences(of: "\\", with: "/")
         // Absolute POSIX paths, and Windows drive paths such as `C:/x` or `C:x`.
         if name.hasPrefix("/") { return .unsafe }
         let scalars = Array(name.unicodeScalars.prefix(2))
