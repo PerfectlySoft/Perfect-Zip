@@ -73,11 +73,15 @@ final class ArchiveWriter {
         if descriptor { flags |= Flag.dataDescriptor }
         let needed: UInt16 = zip64 ? 45 : (method == Method.deflated ? 20 : 10)
         let dos = DOSDateTime(modified)
-        let utc = UInt32(bitPattern: Int32(clamping: modified))
         let localOffset = offset
 
+        // The "UT" field holds a signed 32-bit UTC time; outside 1901...2038 only the DOS time
+        // (local time, 1980...2107) is written.
         var timestamp = [UInt8]()
-        timestamp.le16(ExtraField.extendedTimestamp); timestamp.le16(5); timestamp.append(1); timestamp.le32(utc)
+        if let utc = Int32(exactly: modified) {
+            timestamp.le16(ExtraField.extendedTimestamp); timestamp.le16(5); timestamp.append(1)
+            timestamp.le32(UInt32(bitPattern: utc))
+        }
 
         var local = [UInt8]()
         local.le32(Signature.localHeader)
