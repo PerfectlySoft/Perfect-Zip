@@ -122,12 +122,18 @@ func run(_ tool: String, _ args: [String], cwd: String? = nil) -> (status: Int32
     environment["LC_ALL"] = "C.UTF-8"
     p.environment = environment
     #endif
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = pipe
+    // Output goes to a file, not a Pipe: on Linux, corelibs Foundation's
+    // readDataToEndOfFile() traps (`try!`) when its read(2) fails with EINTR, which happens
+    // under load and under Rosetta.
+    let log = FileManager.default.temporaryDirectory.appendingPathComponent("perfectzip-run-\(UUID().uuidString).log")
+    guard FileManager.default.createFile(atPath: log.path, contents: nil),
+          let out = try? FileHandle(forWritingTo: log) else { return nil }
+    defer { try? out.close(); try? FileManager.default.removeItem(at: log) }
+    p.standardOutput = out
+    p.standardError = out
     do { try p.run() } catch { return nil }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
+    let data = (try? Data(contentsOf: log)) ?? Data()
     return (p.terminationStatus, String(decoding: data, as: UTF8.self))
 }
 

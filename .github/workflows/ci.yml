@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-24.04
     container: swift:${{ matrix.swift }}-noble
     timeout-minutes: 30
+    env:
+      # If a test crashes, Swift's backtracer can hang instead of exiting; fail fast instead.
+      SWIFT_BACKTRACE: enable=no
     strategy:
       fail-fast: false
       matrix:
