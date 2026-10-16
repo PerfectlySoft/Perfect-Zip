@@ -1,147 +1,53 @@
 import Foundation
-import minizip
 
+/// Creates and extracts zip archives.
+///
+/// `Zip` holds no state, so one instance can be shared between threads; each call works on its
+/// own files. Calls that write the same destination or archive concurrently are not coordinated.
 public final class Zip: Sendable {
     public init() {}
 
-    /// Unzip a file from `source` into the `destination` directory.
+    /// Extracts the archive at `source` into the directory `destination`.
+    ///
+    /// - Parameters:
+    ///   - overwrite: When `false`, extraction is refused with ``ZipStatus/ZipCannotOverwrite``
+    ///     if `destination` already exists (or the archive names the same file twice). When
+    ///     `true`, the destination may exist and existing regular files are replaced.
+    ///   - password: The password for entries encrypted with traditional PKWARE encryption.
+    ///     Empty means none; an encrypted entry then fails with ``ZipStatus/UnzipFail``.
+    ///
+    /// Every entry name is checked before anything is written. If any name is absolute, has a
+    /// `..` component (with `/` or `\` separators), contains NUL, or would land outside
+    /// `destination` (resolved through symlinks), nothing is extracted and the result is
+    /// ``ZipStatus/UnzipUnsafePath``. While extracting, a symbolic link already inside the
+    /// destination is never followed or replaced; meeting one also fails with
+    /// ``ZipStatus/UnzipUnsafePath``. Symlink entries in the archive are extracted as regular
+    /// files containing the link text, never as links. `__MACOSX/` metadata is skipped.
+    ///
+    /// On any failure after extraction starts, entries already written stay in `destination`
+    /// (the failing file itself is removed). Nothing is ever written outside it.
     public func unzipFile(source: String, destination: String, overwrite: Bool, password: String = "") -> ZipStatus {
-        let fm = FileManager.default
-
-        guard fm.fileExists(atPath: source) else { return .FileNotFound }
-
-        if !overwrite && fm.fileExists(atPath: destination) {
-            return .ZipCannotOverwrite
-        }
-
-        let destPath = destination.hasSuffix("/") ? destination : destination + "/"
-        let bufferSize: UInt32 = 4096
-        var buffer = [UInt8](repeating: 0, count: Int(bufferSize))
-
-        guard let zip = unzOpen64(source) else { return .UnzipFail }
-        defer { unzClose(zip) }
-
-        guard unzGoToFirstFile(zip) == UNZ_OK else { return .UnzipFail }
-
-        var ret: Int32 = UNZ_OK
-        repeat {
-            guard unzOpenCurrentFile(zip) == UNZ_OK else { return .UnzipFail }
-
-            var fileInfo = unz_file_info64()
-            guard unzGetCurrentFileInfo64(zip, &fileInfo, nil, 0, nil, 0, nil, 0) == UNZ_OK else {
-                unzCloseCurrentFile(zip)
-                return .UnzipFail
-            }
-
-            let nameLen = Int(fileInfo.size_filename)
-            let nameBuf = UnsafeMutablePointer<CChar>.allocate(capacity: nameLen + 1)
-            defer { nameBuf.deallocate() }
-            unzGetCurrentFileInfo64(zip, &fileInfo, nameBuf, UInt(nameLen + 1), nil, 0, nil, 0)
-            nameBuf[nameLen] = 0
-
-            var pathString = String(cString: nameBuf)
-            let isDirectory = nameLen > 0 && nameBuf[nameLen - 1] == 47 // '/'
-
-            if pathString.contains("\\") {
-                pathString = pathString
-                    .replacingOccurrences(of: "\\", with: "/")
-                    .replacingOccurrences(of: "//", with: "/")
-            }
-            let fullPath = destPath + pathString
-
-            if isDirectory {
-                if !fullPath.contains("__MACOSX") {
-                    try? fm.createDirectory(atPath: fullPath, withIntermediateDirectories: true)
-                }
-            } else {
-                let parentPath = URL(fileURLWithPath: fullPath).deletingLastPathComponent().path
-                try? fm.createDirectory(atPath: parentPath, withIntermediateDirectories: true)
-
-                if !fm.fileExists(atPath: fullPath) || overwrite {
-                    fm.createFile(atPath: fullPath, contents: nil)
-                    if let writeHandle = FileHandle(forWritingAtPath: fullPath) {
-                        defer { writeHandle.closeFile() }
-                        var readBytes: Int32 = 0
-                        repeat {
-                            readBytes = buffer.withUnsafeMutableBytes { ptr in
-                                unzReadCurrentFile(zip, ptr.baseAddress!, bufferSize)
-                            }
-                            if readBytes > 0 {
-                                writeHandle.write(Data(buffer.prefix(Int(readBytes))))
-                            }
-                        } while readBytes > 0
-                    }
-                }
-            }
-
-            let crcRet = unzCloseCurrentFile(zip)
-            if crcRet == UNZ_CRCERROR { return .UnzipFail }
-            ret = unzGoToNextFile(zip)
-
-        } while ret == UNZ_OK
-
-        return .ZipSuccess
+        Unzipper(source: source, destination: destination, overwrite: overwrite, password: password).run()
     }
 
-    /// Zip the files/directories at `paths` into a single archive at `zipFilePath`.
+    /// Archives the files and directories at `paths` into a new zip file at `zipFilePath`.
+    ///
+    /// Each path becomes a top-level entry named after its last component; directories are
+    /// added recursively, including empty ones. Symbolic links found while walking a directory
+    /// are skipped; a path given directly in `paths` is followed if it is a link. `.DS_Store`
+    /// files and `__MACOSX` directories are skipped. Two entries with the same name (for example
+    /// `a/x.txt` and `b/x.txt` both given in `paths`) fail with ``ZipStatus/ZipFail``.
+    ///
+    /// The archive is written to a temporary file in the same directory and renamed into place,
+    /// so on failure an existing `zipFilePath` is left untouched.
+    ///
+    /// - Parameters:
+    ///   - zipFilePath: Must end in `.zip`.
+    ///   - overwrite: When `false`, an existing `zipFilePath` fails with
+    ///     ``ZipStatus/ZipCannotOverwrite``.
+    ///   - password: `nil` or empty for no encryption. Otherwise entries use traditional PKWARE
+    ///     encryption, which is weak and only suitable for compatibility, not secrecy.
     public func zipFiles(paths: [String], zipFilePath: String, overwrite: Bool, password: String?) -> ZipStatus {
-        let fm = FileManager.default
-
-        guard zipFilePath.hasSuffix(".zip") else { return .ZipFail }
-
-        if !overwrite && fm.fileExists(atPath: zipFilePath) { return .ZipCannotOverwrite }
-
-        for path in paths {
-            guard fm.fileExists(atPath: path) else { return .FileNotFound }
-        }
-
-        let utils = ZipUtilities()
-        var processedPaths = [ProcessedFilePath]()
-        for path in paths {
-            processedPaths += utils.processZipPaths(path, parentDir: "")
-        }
-
-        guard let zip = zipOpen(zipFilePath, APPEND_STATUS_CREATE) else { return .ZipFail }
-        defer { zipClose(zip, nil) }
-
-        let chunkSize = 16384
-
-        for path in processedPaths {
-            var isDir: ObjCBool = false
-            fm.fileExists(atPath: path.filePath, isDirectory: &isDir)
-            guard !isDir.boolValue, let fileName = path.fileName else { continue }
-
-            guard let readHandle = FileHandle(forReadingAtPath: path.filePath) else {
-                return .ZipFail
-            }
-            defer { readHandle.closeFile() }
-
-            var zipInfo = zip_fileinfo(
-                tmz_date: tm_zip(tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0),
-                dosDate: 0, internal_fa: 0, external_fa: 0
-            )
-            let entryName = path.fileDir.isEmpty ? fileName : path.fileDir + "/" + fileName
-
-            if let pw = password, !pw.isEmpty {
-                zipOpenNewFileInZip3(zip, entryName, &zipInfo, nil, 0, nil, 0, nil,
-                                     Z_DEFLATED, Z_DEFAULT_COMPRESSION, 0,
-                                     -MAX_WBITS, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY, pw, 0)
-            } else {
-                zipOpenNewFileInZip3(zip, entryName, &zipInfo, nil, 0, nil, 0, nil,
-                                     Z_DEFLATED, Z_DEFAULT_COMPRESSION, 0,
-                                     -MAX_WBITS, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY, nil, 0)
-            }
-
-            var data = readHandle.readData(ofLength: chunkSize)
-            while !data.isEmpty {
-                _ = data.withUnsafeBytes { ptr in
-                    zipWriteInFileInZip(zip, ptr.baseAddress!, UInt32(data.count))
-                }
-                data = readHandle.readData(ofLength: chunkSize)
-            }
-            zipCloseFileInZip(zip)
-        }
-
-        return .ZipSuccess
+        Zipper(paths: paths, zipFilePath: zipFilePath, overwrite: overwrite, password: password).run()
     }
 }
