@@ -70,3 +70,9 @@ buildlinux
 Package.resolved
 PADockerfile_build
 .DS_Store
+
+# libFuzzer working files
+Fuzz/corpus/
+Fuzz/crash-*
+Fuzz/leak-*
+Fuzz/timeout-*
