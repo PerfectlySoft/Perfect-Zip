@@ -84,6 +84,9 @@ let trusted = Zip(limits: .unlimited) // only for archives you trust
   bits are never restored. Directories are created with mode 0o755 (less your umask) and get
   no times: restoring a directory's mode could lock extraction out of it (a read-only or
   non-searchable directory), and its time would change again as its entries are written.
+- **Replacing files** (`overwrite: true`): the old file is replaced, even if it is read-only.
+  It keeps its permission bits when the archive has none (archives made on Windows); its
+  ownership, ACLs and extended attributes are not kept.
 - **Skipped:** `.DS_Store` files and `__MACOSX` directories when zipping, and `__MACOSX/`
   entries when unzipping.
 - **Atomic output:** `zipFiles` writes to a temporary file next to `zipFilePath` and renames it
@@ -116,12 +119,18 @@ Extraction is designed for untrusted archives.
   destination with `O_NOFOLLOW` at every level, so a symlink already inside the destination is
   never followed or replaced; meeting one fails with
   `UnzipUnsafePath`.
-- **No writes through hard links.** With `overwrite: true`, an existing file is unlinked and a
-  new one created, never truncated in place, so a hard link inside the destination that shares
-  its inode with a file elsewhere is broken rather than written through.
+- **No writes through hard links.** With `overwrite: true`, an existing file is never
+  truncated or written in place. The entry is written to a temporary file in the same
+  directory and renamed over the original only after it is complete and its CRC has checked
+  out. A hard link inside the destination that shares its inode with a file elsewhere is
+  broken rather than written through, and a failed replacement leaves the original intact.
 - **Depth.** Entry names may have at most 256 path components; deeper ones fail with
-  `UnzipUnsafePath`. Directories are opened incrementally, so extraction time is linear in the
-  number of entries.
+  `UnzipUnsafePath`. Each entry opens its directories from the destination root again, which
+  the cap keeps bounded.
+- **Concurrent changes.** These guarantees are against hostile archives. If another process
+  changes the destination while extraction runs (renaming a directory out of it, say), the
+  entry being written at that moment can end up wherever that directory went; every later
+  entry is placed from the destination root again, and a symlink swapped in is refused.
 - **Structure.** Every length and offset is bounds-checked with overflow-safe arithmetic; each
   local header must match its central-directory record; overlapping entries are refused; an
   entry may not produce more data than it declares, and its CRC is verified.
@@ -130,9 +139,11 @@ Extraction is designed for untrusted archives.
   checked against the declared sizes before extraction starts. Each entry must then produce
   exactly its declared size.
 - **Failure.** Structural, name, limit and password problems are found before anything is
-  written. A later failure (a damaged deflate stream, a full disk, a symlink inside the
-  destination) leaves the entries already extracted in place and removes the failing file;
-  nothing is ever written outside the destination.
+  written. Some problems only show up during extraction: a damaged deflate stream, a full
+  disk, a symlink inside the destination, a file where the destination has a directory, or
+  two names that the filesystem treats as one (such as a case-only difference on a
+  case-insensitive volume). These fail closed and leave a partial result: entries already
+  extracted stay, the failing file is removed, and a file it would have replaced is kept.
 - **Passwords.** ZipCrypto is cryptographically broken; it is supported for reading old
   archives only. Don't rely on it for secrecy.
 

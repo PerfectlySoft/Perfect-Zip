@@ -34,8 +34,17 @@ public final class Zip: Sendable {
     /// ``ZipStatus/UnzipUnsafePath``. Symlink entries in the archive are extracted as regular
     /// files containing the link text, never as links. `__MACOSX/` metadata is skipped.
     ///
+    /// An existing file is replaced (with `overwrite: true`) by writing a temporary file next to
+    /// it and renaming it into place once complete, so a hard link is broken, not written
+    /// through, and a failed replacement keeps the original. A replaced file keeps its
+    /// permissions when the archive records none; ownership, ACLs and extended attributes are
+    /// not kept.
+    ///
     /// On a failure during extraction, entries already written stay in `destination` (the
-    /// failing file itself is removed). Nothing is ever written outside it.
+    /// failing file itself is removed). No entry of a hostile archive is written outside
+    /// `destination`. That guarantee is about the archive: if another process moves a
+    /// directory out of `destination` during extraction, the entry being written at that
+    /// moment goes with it (later entries are placed from `destination` again).
     public func unzipFile(source: String, destination: String, overwrite: Bool, password: String = "") -> ZipStatus {
         Unzipper(source: source, destination: destination, overwrite: overwrite, password: password,
                  limits: limits).run()

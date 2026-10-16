@@ -107,6 +107,91 @@ import Foundation
         #expect(scratch.read("dest/a.txt") == "new")
     }
 
+    private func mode(_ path: String) -> Int {
+        (try? FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? Int) ?? -1
+    }
+
+    /// Rewrites every central "version made by" host to MS-DOS, as a Windows tool would, so the
+    /// entries carry no Unix mode.
+    private func makeDOSHost(_ scratch: Scratch, _ name: String) throws {
+        var bytes = try scratch.bytes(name)
+        var at = 0
+        while let c = find(le32(Signature.centralHeader), in: bytes, from: at) { bytes[c + 5] = 0; at = c + 4 }
+        try scratch.writeBytes(name, bytes)
+    }
+
+    private func noTemporaries(_ dir: String) -> Bool {
+        !((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).contains { $0.hasPrefix(".perfectzip-") }
+    }
+
+    /// A replacement that fails (here, a CRC error) leaves the original file untouched.
+    @Test func failedReplaceKeepsOriginal() throws {
+        let scratch = try Scratch()
+        try scratch.makeDirectory("dest")
+        try scratch.write("dest/a.txt", "USER DATA")
+        try makeArchive(at: scratch.sub("x.zip"), [RawEntry(name: "a.txt", contents: "new contents")])
+        var bytes = try scratch.bytes("x.zip")
+        let c = find(le32(Signature.centralHeader), in: bytes)!
+        bytes[14] ^= 1; bytes[c + 16] ^= 1 // CRC, in both headers
+        try scratch.writeBytes("x.zip", bytes)
+        #expect(Zip().unzipFile(source: scratch.sub("x.zip"), destination: scratch.sub("dest"), overwrite: true) == .UnzipFail)
+        #expect(scratch.read("dest/a.txt") == "USER DATA")
+        #expect(noTemporaries(scratch.sub("dest")))
+    }
+
+    /// Without a Unix mode in the archive, a replaced file keeps its permissions (a private
+    /// file stays private), including a read-only one, which is replaced.
+    @Test(arguments: [0o600, 0o444, 0o751])
+    func replacedFileKeepsMode(original: Int) throws {
+        let scratch = try Scratch()
+        try scratch.makeDirectory("dest")
+        try scratch.write("dest/f.txt", "old")
+        try FileManager.default.setAttributes([.posixPermissions: original], ofItemAtPath: scratch.sub("dest/f.txt"))
+        try makeArchive(at: scratch.sub("x.zip"), [RawEntry(name: "f.txt", contents: "new")])
+        try makeDOSHost(scratch, "x.zip")
+        #expect(Zip().unzipFile(source: scratch.sub("x.zip"), destination: scratch.sub("dest"), overwrite: true) == .ZipSuccess)
+        #expect(scratch.read("dest/f.txt") == "new")
+        #expect(mode(scratch.sub("dest/f.txt")) == original)
+        #expect(noTemporaries(scratch.sub("dest")))
+    }
+
+    /// With a Unix mode in the archive, that mode wins.
+    @Test func replacedFileTakesArchiveMode() throws {
+        let scratch = try Scratch()
+        try scratch.makeDirectory("dest")
+        try scratch.write("dest/f.txt", "old")
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: scratch.sub("dest/f.txt"))
+        try makeArchive(at: scratch.sub("x.zip"), [RawEntry(name: "f.txt", contents: "new", unixMode: 0o100755)])
+        #expect(Zip().unzipFile(source: scratch.sub("x.zip"), destination: scratch.sub("dest"), overwrite: true) == .ZipSuccess)
+        #expect(mode(scratch.sub("dest/f.txt")) == 0o755)
+    }
+
+    /// A file entry where the destination has a directory fails, and the directory's contents
+    /// are untouched.
+    @Test func fileOverDirectoryFails() throws {
+        let scratch = try Scratch()
+        try scratch.makeDirectory("dest/a")
+        try scratch.write("dest/a/keep.txt", "keep")
+        try makeArchive(at: scratch.sub("x.zip"), [RawEntry(name: "a", contents: "file")])
+        #expect(Zip().unzipFile(source: scratch.sub("x.zip"), destination: scratch.sub("dest"), overwrite: true) == .UnzipFail)
+        #expect(scratch.read("dest/a/keep.txt") == "keep")
+        #expect(noTemporaries(scratch.sub("dest")))
+    }
+
+    /// NFC and NFD spellings are different names; the duplicate check compares bytes, so with
+    /// `overwrite: false` they are not mistaken for duplicates before extraction starts.
+    @Test func duplicateCheckComparesBytes() throws {
+        let scratch = try Scratch()
+        try makeArchive(at: scratch.sub("x.zip"), [RawEntry(name: "caf\u{E9}", contents: "1"), RawEntry(name: "cafe\u{301}", contents: "2")])
+        let status = Zip().unzipFile(source: scratch.sub("x.zip"), destination: scratch.sub("d"), overwrite: false)
+        #if os(Linux)
+        #expect(status == .ZipSuccess)
+        #else
+        // APFS treats the two as the same name: the second create fails closed.
+        #expect(status == .ZipSuccess || status == .ZipCannotOverwrite)
+        #endif
+    }
+
     @Test func fileWhereDirectoryIsNeededFails() throws {
         let scratch = try Scratch()
         try makeArchive(at: scratch.sub("a.zip"), [RawEntry(name: "a", contents: "file"), RawEntry(name: "a/b", contents: "x")])

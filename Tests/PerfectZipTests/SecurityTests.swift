@@ -4,6 +4,16 @@ import Foundation
 
 /// Malicious-archive (Zip Slip) tests. Archives are built in the test with minizip's zip API,
 /// which writes whatever entry name it is given.
+/// Set by one thread, read by another, in the rename tests.
+final class Snapshot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = -1
+    var value: Int {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); stored = newValue; lock.unlock() }
+    }
+}
+
 @Suite struct SecurityTests {
 
     /// Extracts `entries` into `<scratch>/out/dest` and returns the status. Anything written
@@ -118,6 +128,52 @@ import Foundation
         #expect(links == 1)
     }
 
+    /// Another process renames a directory out of the destination mid-extraction. Only the
+    /// files already in it (and at most the one being written) end up outside; later entries
+    /// walk from the root again and recreate the directory inside. A cached directory
+    /// descriptor would have kept writing every later entry into the moved directory.
+    @Test func directoryRenamedOutMidExtraction() throws {
+        let scratch = try Scratch()
+        try scratch.makeDirectory("outside")
+        let count = 5_000
+        try makeArchive(at: scratch.sub("x.zip"), (0..<count).map { RawEntry(name: "a/f\($0)", contents: "x") })
+        let dest = scratch.sub("dest"), moved = scratch.sub("outside/a")
+        let snapshot = Snapshot()
+        let mover = Thread {
+            while !FileManager.default.fileExists(atPath: dest + "/a/f50") { usleep(20) }
+            rename(dest + "/a", moved)
+            snapshot.value = (try? FileManager.default.contentsOfDirectory(atPath: moved).count) ?? -1
+        }
+        mover.start()
+        let status = Zip().unzipFile(source: scratch.sub("x.zip"), destination: dest, overwrite: false)
+        while snapshot.value < 0 { usleep(100) }
+        let inside = (try? FileManager.default.contentsOfDirectory(atPath: dest + "/a").count) ?? 0
+        let outside = (try? FileManager.default.contentsOfDirectory(atPath: moved).count) ?? 0
+        #expect(status == .ZipSuccess)
+        #expect(outside <= snapshot.value + 1, "outside \(outside), at rename \(snapshot.value)")
+        #expect(inside + outside == count)
+        // The race must actually have happened mid-extraction for this to mean anything.
+        #expect(inside > 0, "extraction finished before the rename")
+    }
+
+    /// The directory is swapped for a symlink to outside mid-extraction: the next entry refuses
+    /// to follow it.
+    @Test func directorySwappedForSymlinkMidExtraction() throws {
+        let scratch = try Scratch()
+        let outside = try scratch.makeDirectory("outside")
+        try makeArchive(at: scratch.sub("x.zip"), (0..<5_000).map { RawEntry(name: "a/f\($0)", contents: "x") })
+        let dest = scratch.sub("dest")
+        let mover = Thread {
+            while !FileManager.default.fileExists(atPath: dest + "/a/f50") { usleep(20) }
+            rename(dest + "/a", dest + "/a.old")
+            symlink(outside, dest + "/a")
+        }
+        mover.start()
+        let status = Zip().unzipFile(source: scratch.sub("x.zip"), destination: dest, overwrite: false)
+        #expect(status == .UnzipUnsafePath || status == .ZipSuccess) // ZipSuccess only if it finished first
+        #expect(try FileManager.default.contentsOfDirectory(atPath: outside).isEmpty)
+    }
+
     @Test func depthLimit() throws {
         let scratch = try Scratch()
         let ok = Array(repeating: "d", count: EntryPath.maxDepth - 1).joined(separator: "/") + "/leaf.txt"
@@ -129,8 +185,8 @@ import Foundation
         #expect(!FileManager.default.fileExists(atPath: scratch.sub("d2")))
     }
 
-    /// Directory entries nested one level deeper each time (`d/`, `d/d/`, ...) used to cost a
-    /// walk from the root per entry; the directory cache makes this linear.
+    /// Directory entries nested one level deeper each time (`d/`, `d/d/`, ...): each entry walks
+    /// from the root, and the depth cap keeps that cheap.
     @Test(.timeLimit(.minutes(1)))
     func deepNestingIsFast() throws {
         let scratch = try Scratch()
@@ -144,7 +200,7 @@ import Foundation
     }
 
     /// Entries in many sibling directories, revisiting earlier ones, land where they belong.
-    @Test func directoryCacheKeepsEntriesApart() throws {
+    @Test func entriesInRevisitedDirectories() throws {
         let scratch = try Scratch()
         try makeArchive(at: scratch.sub("a.zip"), [
             RawEntry(name: "a/b/1.txt", contents: "1"), RawEntry(name: "a/2.txt", contents: "2"),
