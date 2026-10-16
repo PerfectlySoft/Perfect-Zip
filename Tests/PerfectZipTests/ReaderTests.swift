@@ -125,6 +125,22 @@ import Foundation
         #expect(!FileManager.default.fileExists(atPath: scratch.sub("d")))
     }
 
+    /// Incompressible padding hidden in `__MACOSX/` (never written) can't dilute the
+    /// whole-archive ratio of the entries that are written.
+    @Test func macOSXPaddingDoesNotDiluteRatio() throws {
+        let scratch = try Scratch()
+        var rng = SystemRandomNumberGenerator()
+        let random = (0..<(1 << 20)).map { _ in UInt8.random(in: 0...255, using: &rng) }
+        let zeros = String(repeating: "\0", count: (1 << 20) - 1)
+        let bombs = (0..<200).map { RawEntry(name: "z\($0)", contents: zeros) }
+        try makeArchive(at: scratch.sub("hidden.zip"), [RawEntry(nameBytes: Array("__MACOSX/pad.bin".utf8), contents: random)] + bombs)
+        #expect(Zip().unzipFile(source: scratch.sub("hidden.zip"), destination: scratch.sub("d1"), overwrite: true) == .UnzipLimitExceeded)
+        #expect(!FileManager.default.fileExists(atPath: scratch.sub("d1")))
+        // The same padding as a real, extracted file is written to disk and does count.
+        try makeArchive(at: scratch.sub("visible.zip"), [RawEntry(nameBytes: Array("pad.bin".utf8), contents: random)] + bombs)
+        #expect(Zip().unzipFile(source: scratch.sub("visible.zip"), destination: scratch.sub("d2"), overwrite: true) == .ZipSuccess)
+    }
+
     /// Many small, ordinary files (text that compresses a few times over) are fine, and so is
     /// a small archive of very compressible files under the 1 MiB floor.
     @Test func manySmallFilesAreFine() throws {

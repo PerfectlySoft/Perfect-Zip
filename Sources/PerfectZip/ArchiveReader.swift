@@ -337,13 +337,20 @@ final class ArchiveReader {
 
     private func checkLimits(_ entries: [ArchiveEntry], _ limits: ZipLimits) throws {
         var total: UInt64 = 0
+        var writtenTotal: UInt64 = 0
         var totalCompressed: UInt64 = 0
         for entry in entries where !entry.isDirectory {
             guard let t = checkedAdd(total, entry.uncompressedSize), t <= limits.maxTotalUncompressedSize else {
                 throw ArchiveError.limitExceeded("total uncompressed size")
             }
             total = t
-            totalCompressed = checkedAdd(totalCompressed, entry.compressedSize) ?? .max
+            // Skipped `__MACOSX/` entries are never written, so they don't count toward the
+            // whole-archive ratio (random data there would otherwise dilute it). They still
+            // count toward the total size, the per-entry ratio and every structural check.
+            if entry.name.map(EntryPath.validate) != .skipped {
+                writtenTotal = checkedAdd(writtenTotal, entry.uncompressedSize) ?? .max
+                totalCompressed = checkedAdd(totalCompressed, entry.compressedSize) ?? .max
+            }
             if entry.uncompressedSize >= Self.ratioCheckFloor,
                entry.uncompressedSize / max(entry.compressedSize, 1) > limits.maxCompressionRatio {
                 throw ArchiveError.limitExceeded("compression ratio")
@@ -351,7 +358,7 @@ final class ArchiveReader {
         }
         // The same ratio over the whole archive, so a bomb split into many entries just under
         // the per-entry floor is caught too.
-        if total >= Self.ratioCheckFloor, total / max(totalCompressed, 1) > limits.maxCompressionRatio {
+        if writtenTotal >= Self.ratioCheckFloor, writtenTotal / max(totalCompressed, 1) > limits.maxCompressionRatio {
             throw ArchiveError.limitExceeded("total compression ratio")
         }
     }

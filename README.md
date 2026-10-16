@@ -64,8 +64,9 @@ encrypted archives (ZipCrypto is broken; see Security).
 
 ```swift
 // Defaults: at most 16 GiB in total, and at most 200:1 (declared uncompressed size divided
-// by compressed size, integer division) for every entry of 1 MiB or more and for the archive
-// as a whole once its entries add up to 1 MiB or more.
+// by compressed size, integer division) for every entry of 1 MiB or more, and for all the
+// entries that will be extracted together once they add up to 1 MiB or more (skipped
+// __MACOSX/ entries are left out of that sum, so padding there can't dilute it).
 let strict = Zip(limits: ZipLimits(maxTotalUncompressedSize: 100 << 20, maxCompressionRatio: 100))
 let trusted = Zip(limits: .unlimited) // only for archives you trust
 ```
@@ -135,7 +136,8 @@ Extraction is designed for untrusted archives.
   local header must match its central-directory record; overlapping entries are refused; an
   entry may not produce more data than it declares, and its CRC is verified.
 - **Zip bombs.** `ZipLimits` caps the total size, and the compression ratio both per entry
-  and over the whole archive (so splitting a bomb into many small entries doesn't help),
+  and over all extracted entries together (so splitting a bomb into many small entries, or
+  padding it with never-written `__MACOSX/` data, doesn't help),
   checked against the declared sizes before extraction starts. Each entry must then produce
   exactly its declared size.
 - **Failure.** Structural, name, limit and password problems are found before anything is
