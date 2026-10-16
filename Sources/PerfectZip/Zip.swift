@@ -26,19 +26,28 @@ public final class Zip: Sendable {
     ///
     /// The whole archive is validated before anything is written: its structure (every length
     /// and offset, local headers against the central directory, no overlapping entries), the
-    /// ``limits``, every entry name and the password. If any name is absolute, has a `..`
+    /// ``limits``, every entry name and the password. Clashes with the filesystem (a file
+    /// where the destination has a directory, or names it treats as one, such as a case-only
+    /// difference on a case-insensitive volume) are only found during extraction, and fail
+    /// there with a partial result. If any name is absolute, has a `..`
     /// component (with `/` or `\` separators), contains NUL, or would land outside
     /// `destination` (resolved through symlinks), nothing is extracted and the result is
     /// ``ZipStatus/UnzipUnsafePath``. While extracting, a symbolic link already inside the
-    /// destination is never followed or replaced; meeting one also fails with
+    /// destination is never followed; meeting one also fails with
     /// ``ZipStatus/UnzipUnsafePath``. Symlink entries in the archive are extracted as regular
     /// files containing the link text, never as links. `__MACOSX/` metadata is skipped.
     ///
     /// An existing file is replaced (with `overwrite: true`) by writing a temporary file next to
     /// it and renaming it into place once complete, so a hard link is broken, not written
-    /// through, and a failed replacement keeps the original. A replaced file keeps its
-    /// permissions when the archive records none; ownership, ACLs and extended attributes are
-    /// not kept.
+    /// through, and a failed replacement keeps the original. If the process dies mid-replace,
+    /// the original is untouched and a 0o600 `.perfectzip-*.tmp` file may be left next to it.
+    /// (Extraction also briefly creates and removes a `.perfectzip-*.umask` probe file in
+    /// `destination` to read the umask without changing it.)
+    ///
+    /// Permissions recorded in the archive are applied less the process umask (as bsdtar
+    /// does), never with setuid, setgid or sticky bits, so an archive cannot create
+    /// world-writable files the process wouldn't. A replaced file keeps its own permissions
+    /// when the archive records none; ownership, ACLs and extended attributes are not kept.
     ///
     /// On a failure during extraction, entries already written stay in `destination` (the
     /// failing file itself is removed). No entry of a hostile archive is written outside
@@ -60,7 +69,8 @@ public final class Zip: Sendable {
     /// Unix permissions and modification times are recorded; Zip64 is used where needed.
     ///
     /// The archive is written to a temporary file in the same directory and renamed into place,
-    /// so on failure an existing `zipFilePath` is left untouched.
+    /// so on failure an existing `zipFilePath` is left untouched. If the process dies
+    /// mid-write, a `.<name>.<UUID>.tmp` file may be left next to `zipFilePath`.
     ///
     /// - Parameters:
     ///   - zipFilePath: Must end in `.zip`.

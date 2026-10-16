@@ -77,8 +77,35 @@ import Foundation
         #expect(Zip().unzipFile(source: scratch.sub("a.zip"), destination: scratch.sub("dest"), overwrite: true) == .ZipSuccess)
 
         let attrs = try fm.attributesOfItem(atPath: scratch.sub("dest/src/run.sh"))
-        #expect((attrs[.posixPermissions] as? Int) == 0o750)
+        #expect((attrs[.posixPermissions] as? Int) == 0o750 & ~(try processUmask(scratch)))
         #expect((attrs[.modificationDate] as? Date) == when)
+    }
+
+    /// The process umask, read the way the extractor does (a probe file created 0o777), since
+    /// setting it in a test would race with the tests running in parallel.
+    private func processUmask(_ scratch: Scratch) throws -> Int {
+        let probe = scratch.sub("umask-probe")
+        let fd = open(probe, O_WRONLY | O_CREAT | O_EXCL, 0o777)
+        defer { if fd >= 0 { close(fd) }; unlink(probe) }
+        return ~mode(probe) & 0o777
+    }
+
+    /// Recorded modes are masked by the umask, as with bsdtar: an archive cannot create a
+    /// world-writable file. Under the usual umask 022, 0o777 becomes 0o755.
+    @Test func recordedModesHonourUmask() throws {
+        let scratch = try Scratch()
+        let umask = try processUmask(scratch)
+        try makeArchive(at: scratch.sub("a.zip"), [RawEntry(name: "open", contents: "x", unixMode: 0o100777),
+                                                   RawEntry(name: "suid", contents: "x", unixMode: 0o107777)])
+        #expect(Zip().unzipFile(source: scratch.sub("a.zip"), destination: scratch.sub("dest"), overwrite: true) == .ZipSuccess)
+        #expect(mode(scratch.sub("dest/open")) == 0o777 & ~umask)
+        #expect(mode(scratch.sub("dest/suid")) == 0o777 & ~umask)
+        if umask == 0o022 {
+            #expect(mode(scratch.sub("dest/open")) == 0o755)
+        }
+        #expect(umask & 0o002 == 0 || mode(scratch.sub("dest/open")) & 0o002 == 0)
+        // No probe files are left in the destination.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: scratch.sub("dest")).sorted() == ["open", "suid"])
     }
 
     @Test func setuidBitsAreNotRestored() throws {
@@ -86,7 +113,7 @@ import Foundation
         try makeArchive(at: scratch.sub("a.zip"), [RawEntry(name: "x", contents: "x", unixMode: 0o104755)])
         #expect(Zip().unzipFile(source: scratch.sub("a.zip"), destination: scratch.sub("dest"), overwrite: true) == .ZipSuccess)
         let attrs = try FileManager.default.attributesOfItem(atPath: scratch.sub("dest/x"))
-        #expect((attrs[.posixPermissions] as? Int) == 0o755)
+        #expect((attrs[.posixPermissions] as? Int) == 0o755 & ~(try processUmask(scratch)))
     }
 
     @Test func duplicateEntriesNeedOverwrite() throws {
@@ -163,7 +190,7 @@ import Foundation
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: scratch.sub("dest/f.txt"))
         try makeArchive(at: scratch.sub("x.zip"), [RawEntry(name: "f.txt", contents: "new", unixMode: 0o100755)])
         #expect(Zip().unzipFile(source: scratch.sub("x.zip"), destination: scratch.sub("dest"), overwrite: true) == .ZipSuccess)
-        #expect(mode(scratch.sub("dest/f.txt")) == 0o755)
+        #expect(mode(scratch.sub("dest/f.txt")) == 0o755 & ~(try processUmask(scratch)))
     }
 
     /// A file entry where the destination has a directory fails, and the directory's contents

@@ -81,17 +81,23 @@ let trusted = Zip(limits: .unlimited) // only for archives you trust
   Extraction never creates links: a symlink entry in an archive becomes a regular file holding
   the link text.
 - **Permissions and times:** Unix permission bits and modification times are recorded (DOS
-  time plus the UTC "UT" extra field) and restored on extraction. Setuid, setgid and sticky
-  bits are never restored. Directories are created with mode 0o755 (less your umask) and get
+  time plus the UTC "UT" extra field) and restored on extraction. Restored permissions are
+  masked by the process umask, as bsdtar does (so under umask 022 a recorded 0o777 becomes
+  0o755, and an archive can't create world-writable files); setuid, setgid and sticky bits
+  are never restored. Directories are created with mode 0o755 (less your umask) and get
   no times: restoring a directory's mode could lock extraction out of it (a read-only or
   non-searchable directory), and its time would change again as its entries are written.
 - **Replacing files** (`overwrite: true`): the old file is replaced, even if it is read-only.
   It keeps its permission bits when the archive has none (archives made on Windows); its
-  ownership, ACLs and extended attributes are not kept.
+  ownership, ACLs and extended attributes are not kept. If the process dies mid-replace, the
+  original is untouched and a 0o600 `.perfectzip-*.tmp` file may be left next to it. (Each
+  extraction also briefly creates and removes a `.perfectzip-*.umask` file in the destination,
+  to read the umask without changing it, which `umask(2)` can't do safely with other threads.)
 - **Skipped:** `.DS_Store` files and `__MACOSX` directories when zipping, and `__MACOSX/`
   entries when unzipping.
 - **Atomic output:** `zipFiles` writes to a temporary file next to `zipFilePath` and renames it
   into place, so a failure never leaves a half-written archive or destroys the one it replaces.
+  If the process dies mid-write, a `.<name>.<UUID>.tmp` file may be left next to `zipFilePath`.
 
 ## Status codes
 
@@ -118,8 +124,7 @@ Extraction is designed for untrusted archives.
   reached through a symlink; it is resolved first.
 - **No writes through symlinks.** Files are created relative to a descriptor for the resolved
   destination with `O_NOFOLLOW` at every level, so a symlink already inside the destination is
-  never followed or replaced; meeting one fails with
-  `UnzipUnsafePath`.
+  never followed; meeting one fails with `UnzipUnsafePath`.
 - **No writes through hard links.** With `overwrite: true`, an existing file is never
   truncated or written in place. The entry is written to a temporary file in the same
   directory and renamed over the original only after it is complete and its CRC has checked
@@ -141,7 +146,7 @@ Extraction is designed for untrusted archives.
   checked against the declared sizes before extraction starts. Each entry must then produce
   exactly its declared size.
 - **Failure.** Structural, name, limit and password problems are found before anything is
-  written. Some problems only show up during extraction: a damaged deflate stream, a full
+  written. Clashes with the filesystem and I/O problems only show up during extraction: a damaged deflate stream, a full
   disk, a symlink inside the destination, a file where the destination has a directory, or
   two names that the filesystem treats as one (such as a case-only difference on a
   case-insensitive volume). These fail closed and leave a partial result: entries already
