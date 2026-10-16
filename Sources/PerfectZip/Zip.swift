@@ -79,8 +79,10 @@ public final class Zip: Sendable {
 public struct ZipLimits: Sendable, Hashable {
     /// The most bytes all entries together may expand to. Default 16 GiB.
     public var maxTotalUncompressedSize: UInt64
-    /// The highest uncompressed-to-compressed ratio allowed for an entry larger than 1 MiB.
-    /// Default 200. Deflate cannot exceed about 1032:1, so a value above that disables the check.
+    /// The highest ratio of declared uncompressed size to compressed size (integer division)
+    /// allowed for any entry of 1 MiB or more, and for the sum over all entries once that sum is
+    /// 1 MiB or more. Default 200. Deflate cannot exceed about 1032:1, so a value above that
+    /// disables the check.
     public var maxCompressionRatio: UInt64
 
     public init(maxTotalUncompressedSize: UInt64 = 16 << 30, maxCompressionRatio: UInt64 = 200) {

@@ -63,7 +63,9 @@ encrypted archives (ZipCrypto is broken; see Security).
 `.UnzipLimitExceeded`, before writing anything:
 
 ```swift
-// Defaults: 16 GiB in total, and at most 200:1 compression for any entry over 1 MiB.
+// Defaults: at most 16 GiB in total, and at most 200:1 (declared uncompressed size divided
+// by compressed size, integer division) for every entry of 1 MiB or more and for the archive
+// as a whole once its entries add up to 1 MiB or more.
 let strict = Zip(limits: ZipLimits(maxTotalUncompressedSize: 100 << 20, maxCompressionRatio: 100))
 let trusted = Zip(limits: .unlimited) // only for archives you trust
 ```
@@ -79,7 +81,9 @@ let trusted = Zip(limits: .unlimited) // only for archives you trust
   the link text.
 - **Permissions and times:** Unix permission bits and modification times are recorded (DOS
   time plus the UTC "UT" extra field) and restored on extraction. Setuid, setgid and sticky
-  bits are never restored; directory permissions and times are not restored.
+  bits are never restored. Directories are created with mode 0o755 (less your umask) and get
+  no times: restoring a directory's mode could lock extraction out of it (a read-only or
+  non-searchable directory), and its time would change again as its entries are written.
 - **Skipped:** `.DS_Store` files and `__MACOSX` directories when zipping, and `__MACOSX/`
   entries when unzipping.
 - **Atomic output:** `zipFiles` writes to a temporary file next to `zipFilePath` and renames it
@@ -94,7 +98,7 @@ let trusted = Zip(limits: .unlimited) // only for archives you trust
 | `ZipCannotOverwrite` | `overwrite: false` and the destination (or the archive file) exists, or an archive names the same file twice. |
 | `ZipFail` | Creating the archive failed: bad name (`zipFilePath` must end in `.zip`), I/O error, or two entries with the same name. |
 | `UnzipFail` | The archive is damaged or unsupported (method, multi-disk, AES, data before the archive), or an I/O error. |
-| `UnzipUnsafePath` | An entry name is unsafe, or extraction would go through a symbolic link. New in 4.0. |
+| `UnzipUnsafePath` | An entry name is unsafe or more than 256 components deep, or extraction would go through a symbolic link. New in 4.0. |
 | `UnzipLimitExceeded` | The archive exceeds `ZipLimits`. New in 4.0. |
 | `UnzipIncorrectPassword` | An entry is encrypted and the password is missing or wrong. New in 4.0. |
 | `ZipEncryptionUnsupported` | A password was passed to the deprecated `zipFiles(...password:)`. New in 4.0. |
@@ -112,11 +116,19 @@ Extraction is designed for untrusted archives.
   destination with `O_NOFOLLOW` at every level, so a symlink already inside the destination is
   never followed or replaced; meeting one fails with
   `UnzipUnsafePath`.
+- **No writes through hard links.** With `overwrite: true`, an existing file is unlinked and a
+  new one created, never truncated in place, so a hard link inside the destination that shares
+  its inode with a file elsewhere is broken rather than written through.
+- **Depth.** Entry names may have at most 256 path components; deeper ones fail with
+  `UnzipUnsafePath`. Directories are opened incrementally, so extraction time is linear in the
+  number of entries.
 - **Structure.** Every length and offset is bounds-checked with overflow-safe arithmetic; each
   local header must match its central-directory record; overlapping entries are refused; an
   entry may not produce more data than it declares, and its CRC is verified.
-- **Zip bombs.** `ZipLimits` caps the total size and the compression ratio, checked against the
-  declared sizes before extraction starts.
+- **Zip bombs.** `ZipLimits` caps the total size, and the compression ratio both per entry
+  and over the whole archive (so splitting a bomb into many small entries doesn't help),
+  checked against the declared sizes before extraction starts. Each entry must then produce
+  exactly its declared size.
 - **Failure.** Structural, name, limit and password problems are found before anything is
   written. A later failure (a damaged deflate stream, a full disk, a symlink inside the
   destination) leaves the entries already extracted in place and removes the failing file;

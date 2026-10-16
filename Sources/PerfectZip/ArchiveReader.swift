@@ -43,8 +43,8 @@ final class ArchiveReader {
     let fileSize: UInt64
     static let bufferSize = 64 * 1024
 
-    /// Below this declared size an entry's compression ratio is not checked: tiny files of
-    /// repeated bytes legitimately compress very well.
+    /// Below this declared size an entry's (or the whole archive's) compression ratio is not
+    /// checked: tiny files of repeated bytes legitimately compress very well.
     static let ratioCheckFloor: UInt64 = 1 << 20
 
     init(path: String) throws {
@@ -337,17 +337,22 @@ final class ArchiveReader {
 
     private func checkLimits(_ entries: [ArchiveEntry], _ limits: ZipLimits) throws {
         var total: UInt64 = 0
+        var totalCompressed: UInt64 = 0
         for entry in entries where !entry.isDirectory {
             guard let t = checkedAdd(total, entry.uncompressedSize), t <= limits.maxTotalUncompressedSize else {
                 throw ArchiveError.limitExceeded("total uncompressed size")
             }
             total = t
-            if entry.uncompressedSize > Self.ratioCheckFloor {
-                let ratio = entry.uncompressedSize / max(entry.compressedSize, 1)
-                guard ratio <= limits.maxCompressionRatio else {
-                    throw ArchiveError.limitExceeded("compression ratio")
-                }
+            totalCompressed = checkedAdd(totalCompressed, entry.compressedSize) ?? .max
+            if entry.uncompressedSize >= Self.ratioCheckFloor,
+               entry.uncompressedSize / max(entry.compressedSize, 1) > limits.maxCompressionRatio {
+                throw ArchiveError.limitExceeded("compression ratio")
             }
+        }
+        // The same ratio over the whole archive, so a bomb split into many entries just under
+        // the per-entry floor is caught too.
+        if total >= Self.ratioCheckFloor, total / max(totalCompressed, 1) > limits.maxCompressionRatio {
+            throw ArchiveError.limitExceeded("total compression ratio")
         }
     }
 

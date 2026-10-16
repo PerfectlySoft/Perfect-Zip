@@ -101,6 +101,68 @@ import Foundation
         #expect(attrs[.type] as? FileAttributeType == .typeSymbolicLink)
     }
 
+    /// `overwrite: true` replaces an existing file instead of truncating it, so a hard link in
+    /// the destination to a file outside it is broken, not written through.
+    @Test func preexistingHardLinkInDestination() throws {
+        let scratch = try Scratch()
+        try scratch.makeDirectory("outside")
+        try scratch.write("outside/victim.txt", "original")
+        let dest = try scratch.makeDirectory("dest")
+        try FileManager.default.linkItem(atPath: scratch.sub("outside/victim.txt"), toPath: dest + "/a.txt")
+        try makeArchive(at: scratch.sub("a.zip"), [RawEntry(name: "a.txt", contents: "pwned")])
+
+        #expect(Zip().unzipFile(source: scratch.sub("a.zip"), destination: dest, overwrite: true) == .ZipSuccess)
+        #expect(scratch.read("outside/victim.txt") == "original")
+        #expect(scratch.read("dest/a.txt") == "pwned")
+        let links = try FileManager.default.attributesOfItem(atPath: scratch.sub("outside/victim.txt"))[.referenceCount] as? Int
+        #expect(links == 1)
+    }
+
+    @Test func depthLimit() throws {
+        let scratch = try Scratch()
+        let ok = Array(repeating: "d", count: EntryPath.maxDepth - 1).joined(separator: "/") + "/leaf.txt"
+        let deep = Array(repeating: "d", count: EntryPath.maxDepth).joined(separator: "/") + "/leaf.txt"
+        try makeArchive(at: scratch.sub("ok.zip"), [RawEntry(name: ok, contents: "x")])
+        try makeArchive(at: scratch.sub("deep.zip"), [RawEntry(name: deep, contents: "x")])
+        #expect(Zip().unzipFile(source: scratch.sub("ok.zip"), destination: scratch.sub("d1"), overwrite: true) == .ZipSuccess)
+        #expect(Zip().unzipFile(source: scratch.sub("deep.zip"), destination: scratch.sub("d2"), overwrite: true) == .UnzipUnsafePath)
+        #expect(!FileManager.default.fileExists(atPath: scratch.sub("d2")))
+    }
+
+    /// Directory entries nested one level deeper each time (`d/`, `d/d/`, ...) used to cost a
+    /// walk from the root per entry; the directory cache makes this linear.
+    @Test(.timeLimit(.minutes(1)))
+    func deepNestingIsFast() throws {
+        let scratch = try Scratch()
+        var entries = (1..<EntryPath.maxDepth).map { RawEntry(name: String(repeating: "d/", count: $0)) }
+        entries.append(RawEntry(name: String(repeating: "d/", count: EntryPath.maxDepth - 1) + "leaf.txt", contents: "leaf"))
+        try makeArchive(at: scratch.sub("deep.zip"), entries)
+        let start = Date()
+        #expect(Zip().unzipFile(source: scratch.sub("deep.zip"), destination: scratch.sub("d"), overwrite: true) == .ZipSuccess)
+        #expect(Date().timeIntervalSince(start) < 10)
+        #expect(scratch.read("d/" + String(repeating: "d/", count: EntryPath.maxDepth - 1) + "leaf.txt") == "leaf")
+    }
+
+    /// Entries in many sibling directories, revisiting earlier ones, land where they belong.
+    @Test func directoryCacheKeepsEntriesApart() throws {
+        let scratch = try Scratch()
+        try makeArchive(at: scratch.sub("a.zip"), [
+            RawEntry(name: "a/b/1.txt", contents: "1"), RawEntry(name: "a/2.txt", contents: "2"),
+            RawEntry(name: "a/b/c/3.txt", contents: "3"), RawEntry(name: "x/4.txt", contents: "4"),
+            RawEntry(name: "a/b/5.txt", contents: "5"), RawEntry(name: "6.txt", contents: "6"),
+            RawEntry(name: "caf\u{E9}/7.txt", contents: "7"), RawEntry(name: "cafe\u{301}/8.txt", contents: "8"),
+        ])
+        #expect(Zip().unzipFile(source: scratch.sub("a.zip"), destination: scratch.sub("d"), overwrite: true) == .ZipSuccess)
+        for (path, text) in [("a/b/1.txt", "1"), ("a/2.txt", "2"), ("a/b/c/3.txt", "3"), ("x/4.txt", "4"),
+                             ("a/b/5.txt", "5"), ("6.txt", "6")] {
+            #expect(scratch.read("d/" + path) == text, "\(path)")
+        }
+        // NFC and NFD spellings are different names on Linux; on macOS (APFS) they may be the
+        // same directory. Either way both files are extracted.
+        let all = (try FileManager.default.subpathsOfDirectory(atPath: scratch.sub("d"))).filter { $0.hasSuffix(".txt") }
+        #expect(all.count == 8)
+    }
+
     /// The destination itself may be reached through a symlink; it is resolved first.
     @Test func symlinkedDestinationIsAllowed() throws {
         let scratch = try Scratch()
@@ -128,14 +190,18 @@ import Foundation
         let scratch = try Scratch()
         try scratch.makeDirectory("tree/sub")
         try scratch.write("tree/sub/f.txt", "f")
-        // `tree/sub/..` used to become entries named `../...`.
-        let status = Zip().zipFiles(paths: [scratch.sub("tree/sub/..")], zipFilePath: scratch.sub("a.zip"),
-                                    overwrite: true)
-        #expect(status == .ZipSuccess)
-        let names = try entryNames(of: scratch.sub("a.zip"))
-        #expect(names == ["tree/", "tree/sub/", "tree/sub/f.txt"])
-        for name in names {
-            #expect(EntryPath.validate(Array(name.utf8)) != .unsafe)
+        // `tree/sub/..` used to become entries named `../...`. Every spelling of the same
+        // directory gives the same, safe names.
+        for spelling in ["tree/sub/..", "tree/./sub/../", "tree/sub/../../tree", "tree//sub/.."] {
+            let archive = scratch.sub("a.zip")
+            let status = Zip().zipFiles(paths: [scratch.sub(spelling)], zipFilePath: archive, overwrite: true)
+            #expect(status == .ZipSuccess, "\(spelling)")
+            let names = try entryNames(of: archive)
+            #expect(names == ["tree/", "tree/sub/", "tree/sub/f.txt"], "\(spelling)")
+            for name in names {
+                #expect(!name.split(separator: "/").contains(".."), "\(spelling): \(name)")
+                #expect(EntryPath.validate(Array(name.utf8)) != .unsafe)
+            }
         }
     }
 

@@ -2,6 +2,10 @@ import Foundation
 
 /// What an archive entry name means once it has been checked.
 enum EntryPath: Equatable, Sendable {
+    /// The most path components an entry may have. Deeper names are refused as unsafe: real
+    /// archives come nowhere near this, and deep nesting is a resource-exhaustion trick.
+    static let maxDepth = 256
+
     /// A directory, as path components relative to the destination.
     case directory([String])
     /// A regular file, as path components relative to the destination.
@@ -41,7 +45,7 @@ enum EntryPath: Equatable, Sendable {
             default: components.append(String(part))
             }
         }
-        guard !components.isEmpty else { return .unsafe }
+        guard !components.isEmpty, components.count <= maxDepth else { return .unsafe }
         if components.contains("__MACOSX") { return .skipped }
         return isDirectory ? .directory(components) : .file(components)
     }

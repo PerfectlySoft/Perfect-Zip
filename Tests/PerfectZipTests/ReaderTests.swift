@@ -113,6 +113,36 @@ import Foundation
         #expect((try FileManager.default.attributesOfItem(atPath: scratch.sub("d2/zeros.bin"))[.size] as? Int) == 10 << 20)
     }
 
+    /// A bomb split into entries of exactly the per-entry floor (64 x 1 MiB of zeros, about
+    /// 70 KB compressed) is caught by the per-entry check (`>=` the floor) and, below it, by the
+    /// whole-archive ratio.
+    @Test(arguments: [1 << 20, (1 << 20) - 1])
+    func splitBombIsRefused(entrySize: Int) throws {
+        let scratch = try Scratch()
+        let zeros = String(repeating: "\0", count: entrySize)
+        try makeArchive(at: scratch.sub("split.zip"), (0..<64).map { RawEntry(name: "z\($0).bin", contents: zeros) })
+        #expect(Zip().unzipFile(source: scratch.sub("split.zip"), destination: scratch.sub("d"), overwrite: true) == .UnzipLimitExceeded)
+        #expect(!FileManager.default.fileExists(atPath: scratch.sub("d")))
+    }
+
+    /// Many small, ordinary files (text that compresses a few times over) are fine, and so is
+    /// a small archive of very compressible files under the 1 MiB floor.
+    @Test func manySmallFilesAreFine() throws {
+        let scratch = try Scratch()
+        var rng = SystemRandomNumberGenerator()
+        let words = ["zip", "archive", "swift", "perfect", "deflate", "entry", "header", "central"]
+        let files = (0..<2000).map { i in
+            RawEntry(name: "docs/\(i % 40)/file\(i).txt",
+                     contents: (0..<200).map { _ in words.randomElement(using: &rng)! }.joined(separator: " "))
+        }
+        try makeArchive(at: scratch.sub("docs.zip"), files)
+        #expect(Zip().unzipFile(source: scratch.sub("docs.zip"), destination: scratch.sub("d1"), overwrite: true) == .ZipSuccess)
+
+        let tiny = (0..<100).map { RawEntry(name: "t\($0)", contents: String(repeating: "a", count: 10_000)) }
+        try makeArchive(at: scratch.sub("tiny.zip"), tiny) // ~1 MB total at ~300:1
+        #expect(Zip().unzipFile(source: scratch.sub("tiny.zip"), destination: scratch.sub("d2"), overwrite: true) == .ZipSuccess)
+    }
+
     @Test func totalSizeLimit() throws {
         let scratch = try Scratch()
         try makeArchive(at: scratch.sub("a.zip"), [RawEntry(name: "a", contents: String(repeating: "a", count: 600)),

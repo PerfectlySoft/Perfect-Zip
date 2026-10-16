@@ -60,6 +60,7 @@ struct Unzipper {
         let rootFD = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard rootFD >= 0 else { return .UnzipFail }
         defer { closeFD(rootFD) }
+        let directories = DirectoryCache(rootFD: rootFD)
 
         for entry in entries {
             switch entry.path {
@@ -83,11 +84,11 @@ struct Unzipper {
             case .unsafe:
                 return .UnzipUnsafePath // already rejected in pass 1
             case .directory(let components):
-                let (fd, dirStatus) = openDirectory(components, under: rootFD)
+                let (fd, dirStatus) = directories.open(components)
                 if fd >= 0 { closeFD(fd) }
                 status = dirStatus
             case .file(let components):
-                status = extractFile(reader, entry.info, components, under: rootFD,
+                status = extractFile(reader, entry.info, components, directories: directories,
                                      password: passwordBytes, input: input, output: output)
             }
             guard status == .ZipSuccess else { return status }
@@ -95,32 +96,10 @@ struct Unzipper {
         return .ZipSuccess
     }
 
-    /// Opens (creating as needed) the directory `components` below `rootFD`, refusing to pass
-    /// through a symbolic link at any level. Returns the descriptor, or -1 and a status.
-    private func openDirectory(_ components: some Collection<String>, under rootFD: Int32) -> (Int32, ZipStatus) {
-        var current = dup(rootFD)
-        guard current >= 0 else { return (-1, .UnzipFail) }
-        for component in components {
-            if mkdirat(current, component, 0o755) != 0 && errno != EEXIST {
-                closeFD(current)
-                return (-1, .UnzipFail)
-            }
-            let next = openat(current, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            if next < 0 {
-                let isLink = fileType(at: current, component) == FileType.symlink
-                closeFD(current)
-                return (-1, isLink ? .UnzipUnsafePath : .UnzipFail)
-            }
-            closeFD(current)
-            current = next
-        }
-        return (current, .ZipSuccess)
-    }
-
     private func extractFile(_ reader: ArchiveReader, _ info: ArchiveEntry, _ components: [String],
-                             under rootFD: Int32, password: [UInt8],
+                             directories: DirectoryCache, password: [UInt8],
                              input: UnsafeMutableRawPointer, output: UnsafeMutableRawPointer) -> ZipStatus {
-        let (dirFD, dirStatus) = openDirectory(components.dropLast(), under: rootFD)
+        let (dirFD, dirStatus) = directories.open(components.dropLast())
         guard dirFD >= 0 else { return dirStatus }
         defer { closeFD(dirFD) }
         let name = components[components.count - 1]
@@ -131,7 +110,10 @@ struct Unzipper {
             guard overwrite else { return .ZipCannotOverwrite }
             switch fileType(at: dirFD, name) {
             case FileType.regular:
-                fd = openat(dirFD, name, O_WRONLY | O_TRUNC | O_NOFOLLOW | O_CLOEXEC)
+                // Replace the file rather than truncate it: truncating would write through a
+                // hard link, possibly to a file outside the destination.
+                guard unlinkat(dirFD, name, 0) == 0 else { return .UnzipFail }
+                fd = openat(dirFD, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
                 guard fd >= 0 else { return .UnzipFail }
             case FileType.symlink:
                 // Never write through, or silently replace, a link inside the destination.
@@ -170,5 +152,58 @@ struct Unzipper {
         guard let seconds = info.modificationTime else { return }
         var times = [timespec(tv_sec: time_t(seconds), tv_nsec: 0), timespec(tv_sec: time_t(seconds), tv_nsec: 0)]
         _ = futimens(fd, &times)
+    }
+}
+
+/// Opens directories below the destination, creating them as needed and refusing to pass
+/// through a symbolic link at any level (`O_NOFOLLOW` on every component).
+///
+/// It keeps the most recently opened directory, so an entry in that directory or below it only
+/// opens the components that differ. Without this every entry walked from the root again, and
+/// a deeply nested archive took quadratic time. Only one descriptor is cached, so a deep
+/// archive cannot exhaust the descriptor limit; together with ``EntryPath/maxDepth`` that keeps
+/// the worst case linear in the number of entries.
+final class DirectoryCache {
+    private let rootFD: Int32
+    private var cached: (components: [String], fd: Int32)?
+
+    init(rootFD: Int32) { self.rootFD = rootFD }
+
+    deinit { if let cached { closeFD(cached.fd) } }
+
+    /// Returns a new descriptor (the caller closes it) for `components` below the root, or -1
+    /// and the failure status.
+    func open(_ components: some Collection<String>) -> (Int32, ZipStatus) {
+        let wanted = Array(components)
+        var start = 0
+        var current = rootFD
+        // Names are compared as bytes: Swift's String equality would treat NFC and NFD
+        // spellings as the same directory, and on Linux they are not.
+        if let cached, cached.components.count <= wanted.count,
+           zip(cached.components, wanted).allSatisfy({ $0.utf8.elementsEqual($1.utf8) }) {
+            start = cached.components.count
+            current = cached.fd
+        }
+        var owned = false // whether `current` is a descriptor opened in this call
+        for component in wanted[start...] {
+            func fail(_ status: ZipStatus) -> (Int32, ZipStatus) {
+                if owned { closeFD(current) }
+                return (-1, status)
+            }
+            if mkdirat(current, component, 0o755) != 0 && errno != EEXIST { return fail(.UnzipFail) }
+            let next = openat(current, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard next >= 0 else {
+                return fail(fileType(at: current, component) == FileType.symlink ? .UnzipUnsafePath : .UnzipFail)
+            }
+            if owned { closeFD(current) }
+            current = next
+            owned = true
+        }
+        if owned {
+            if let cached { closeFD(cached.fd) }
+            cached = (wanted, current)
+        }
+        let fd = dup(current)
+        return fd >= 0 ? (fd, .ZipSuccess) : (-1, .UnzipFail)
     }
 }
