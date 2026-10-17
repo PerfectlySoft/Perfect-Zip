@@ -108,6 +108,39 @@ import Foundation
         #expect(try FileManager.default.contentsOfDirectory(atPath: scratch.sub("dest")).sorted() == ["open", "suid"])
     }
 
+    /// A read-only destination works when nothing has to be written to it: the umask probe is
+    /// only made when a recorded mode is applied, in the entry's own (writable) directory.
+    @Test func readOnlyDestinationNeedingNoWrites() throws {
+        let scratch = try Scratch()
+        try makeArchive(at: scratch.sub("empty.zip"), [])
+        try makeArchive(at: scratch.sub("dirs.zip"), [RawEntry(name: "sub/")])
+        try makeArchive(at: scratch.sub("mac.zip"), [RawEntry(name: "__MACOSX/._x", contents: "m")])
+        try makeArchive(at: scratch.sub("file.zip"), [RawEntry(name: "f", contents: "x")])
+        let ro = try scratch.makeDirectory("ro")
+        try scratch.makeDirectory("ro/sub")
+        chmod(ro, 0o555)
+        defer { chmod(ro, 0o755) }
+        for name in ["empty", "dirs", "mac"] {
+            #expect(Zip().unzipFile(source: scratch.sub("\(name).zip"), destination: ro, overwrite: true) == .ZipSuccess, "\(name)")
+        }
+        if getuid() != 0 { // root can write anyway
+            #expect(Zip().unzipFile(source: scratch.sub("file.zip"), destination: ro, overwrite: true) == .UnzipFail)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: ro).sorted() == ["sub"])
+    }
+
+    /// Entries in a subdirectory: the probe goes there and is removed.
+    @Test func umaskProbeLeavesNothing() throws {
+        let scratch = try Scratch()
+        try makeArchive(at: scratch.sub("a.zip"), [RawEntry(name: "x/y/a", contents: "x", unixMode: 0o100777),
+                                                   RawEntry(name: "x/b", contents: "x", unixMode: 0o100640)])
+        #expect(Zip().unzipFile(source: scratch.sub("a.zip"), destination: scratch.sub("d"), overwrite: false) == .ZipSuccess)
+        let all = try FileManager.default.subpathsOfDirectory(atPath: scratch.sub("d"))
+        #expect(!all.contains { $0.contains(".perfectzip-") })
+        #expect(mode(scratch.sub("d/x/y/a")) == 0o777 & ~(try processUmask(scratch)))
+        #expect(mode(scratch.sub("d/x/b")) == 0o640 & ~(try processUmask(scratch)))
+    }
+
     @Test func setuidBitsAreNotRestored() throws {
         let scratch = try Scratch()
         try makeArchive(at: scratch.sub("a.zip"), [RawEntry(name: "x", contents: "x", unixMode: 0o104755)])

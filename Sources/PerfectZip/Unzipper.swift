@@ -65,7 +65,7 @@ struct Unzipper {
         let rootFD = open(root, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard rootFD >= 0 else { return .UnzipFail }
         defer { closeFD(rootFD) }
-        guard let umask = currentUmask(in: rootFD) else { return .UnzipFail }
+        let umask = LazyUmask()
 
         for entry in entries {
             switch entry.path {
@@ -133,7 +133,7 @@ struct Unzipper {
     }
 
     private func extractFile(_ reader: ArchiveReader, _ info: ArchiveEntry, _ components: [String],
-                             under rootFD: Int32, umask: mode_t, password: [UInt8],
+                             under rootFD: Int32, umask: LazyUmask, password: [UInt8],
                              input: UnsafeMutableRawPointer, output: UnsafeMutableRawPointer) -> ZipStatus {
         let (dirFD, dirStatus) = openDirectory(components.dropLast(), under: rootFD)
         guard dirFD >= 0 else { return dirStatus }
@@ -177,7 +177,7 @@ struct Unzipper {
             try reader.extract(info, password: password, input: input, output: output) { base, count in
                 guard writeAll(fd, base, count) else { throw ArchiveError.io("write") }
             }
-            applyAttributes(info, to: fd, umask: umask, replacing: replacedMode)
+            applyAttributes(info, to: fd, in: dirFD, umask: umask, replacing: replacedMode)
         } catch let error as ArchiveError {
             status = error.status
         } catch {
@@ -191,41 +191,20 @@ struct Unzipper {
         return status
     }
 
-    /// The process umask, read without changing it: `umask(2)` can only be read by setting it,
-    /// which races with other threads creating files. Instead a probe file is created with mode
-    /// 0o777 in the destination (where `open` applies the umask atomically) and removed again.
-    /// (A default ACL on the destination directory, where supported, takes the umask's place,
-    /// and that is what the probe then reports.)
-    private func currentUmask(in rootFD: Int32) -> mode_t? {
-        for _ in 0..<8 {
-            let name = ".perfectzip-\(UInt64.random(in: 0...UInt64.max)).umask"
-            let fd = openat(rootFD, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o777)
-            if fd < 0 {
-                if errno == EEXIST { continue }
-                return nil
-            }
-            var st = stat()
-            let ok = fstat(fd, &st) == 0
-            closeFD(fd)
-            _ = unlinkat(rootFD, name, 0)
-            return ok ? ~st.st_mode & 0o777 : nil
-        }
-        return nil
-    }
-
     /// Restores the permission bits and the modification time (the UTC "UT" extra field if
     /// present, else the DOS time). Permissions come from the archive for Unix-made entries
     /// (less the umask);
     /// otherwise a replaced file keeps its old permissions. Setuid, setgid and sticky bits are
     /// never set.
-    private func applyAttributes(_ info: ArchiveEntry, to fd: Int32, umask: mode_t, replacing oldMode: mode_t?) {
+    private func applyAttributes(_ info: ArchiveEntry, to fd: Int32, in dirFD: Int32, umask: LazyUmask,
+                                 replacing oldMode: mode_t?) {
         var permissions: mode_t?
         if let mode = info.unixMode {
             let type = mode & FileType.mask
             if (type == FileType.regular || type == 0) && mode & 0o777 != 0 {
                 // The process umask applies, as with bsdtar, so an archive cannot create
                 // world-writable files where the process wouldn't.
-                permissions = mode_t(mode & 0o777) & ~umask
+                permissions = mode_t(mode & 0o777) & ~umask.value(probingIn: dirFD)
             }
         }
         // A new file without a Unix mode keeps the 0o644 (less umask) it was created with.
@@ -233,5 +212,43 @@ struct Unzipper {
         guard let seconds = info.modificationTime else { return }
         var times = [timespec(tv_sec: time_t(seconds), tv_nsec: 0), timespec(tv_sec: time_t(seconds), tv_nsec: 0)]
         _ = futimens(fd, &times)
+    }
+}
+
+/// The process umask, read at most once per extraction and only when a recorded Unix mode is
+/// about to be applied, so extracting into a read-only destination that needs no writes
+/// (an empty archive, existing directories, `__MACOSX/` only) still works.
+///
+/// `umask(2)` can only be read by setting it, which races with other threads creating files.
+/// Instead a probe file is created with mode 0o777 in the directory the entry was just written
+/// to (so it is writable), where `open` applies the umask atomically; it is checked and removed
+/// at once. What it reports is the effective umask of that directory: a default ACL, where
+/// supported, takes the umask's place. If the probe can't be created, 0o022 is used, so the
+/// result is never more permissive than the common default.
+final class LazyUmask {
+    private var cached: mode_t?
+
+    func value(probingIn dirFD: Int32) -> mode_t {
+        if let cached { return cached }
+        let found = Self.probe(dirFD) ?? 0o022
+        cached = found
+        return found
+    }
+
+    private static func probe(_ dirFD: Int32) -> mode_t? {
+        for _ in 0..<8 {
+            let name = ".perfectzip-\(UInt64.random(in: 0...UInt64.max)).umask"
+            let fd = openat(dirFD, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o777)
+            if fd < 0 {
+                if errno == EEXIST { continue }
+                return nil
+            }
+            var st = stat()
+            let ok = fstat(fd, &st) == 0
+            closeFD(fd)
+            _ = unlinkat(dirFD, name, 0)
+            return ok ? ~st.st_mode & 0o777 : nil
+        }
+        return nil
     }
 }

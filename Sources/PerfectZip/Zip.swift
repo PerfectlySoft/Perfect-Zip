@@ -41,12 +41,13 @@ public final class Zip: Sendable {
     /// it and renaming it into place once complete, so a hard link is broken, not written
     /// through, and a failed replacement keeps the original. If the process dies mid-replace,
     /// the original is untouched and a 0o600 `.perfectzip-*.tmp` file may be left next to it.
-    /// (Extraction also briefly creates and removes a `.perfectzip-*.umask` probe file in
-    /// `destination` to read the umask without changing it.)
+    /// (The first time a recorded mode is applied, a `.perfectzip-*.umask` probe file is briefly
+    /// created and removed in that entry's directory, to read the umask without changing it.)
     ///
-    /// Permissions recorded in the archive are applied less the process umask (as bsdtar
-    /// does), never with setuid, setgid or sticky bits, so an archive cannot create
-    /// world-writable files the process wouldn't. A replaced file keeps its own permissions
+    /// Permissions recorded in the archive are applied less the umask (as bsdtar does), never
+    /// with setuid, setgid or sticky bits, so an archive cannot create world-writable files the
+    /// process wouldn't. It is the effective umask of the entry's directory (a default ACL
+    /// takes the umask's place where supported); if it can't be read, 0o022 is used. A replaced file keeps its own permissions
     /// when the archive records none; ownership, ACLs and extended attributes are not kept.
     ///
     /// On a failure during extraction, entries already written stay in `destination` (the

@@ -82,17 +82,21 @@ let trusted = Zip(limits: .unlimited) // only for archives you trust
   the link text.
 - **Permissions and times:** Unix permission bits and modification times are recorded (DOS
   time plus the UTC "UT" extra field) and restored on extraction. Restored permissions are
-  masked by the process umask, as bsdtar does (so under umask 022 a recorded 0o777 becomes
-  0o755, and an archive can't create world-writable files); setuid, setgid and sticky bits
-  are never restored. Directories are created with mode 0o755 (less your umask) and get
+  masked by the umask, as bsdtar does (so under umask 022 a recorded 0o777 becomes 0o755,
+  and an archive can't create world-writable files); setuid, setgid and sticky bits are
+  never restored. Strictly, this is the effective umask of the directory the file goes into:
+  where a default ACL replaces the umask, that is what applies. If it can't be determined,
+  0o022 is used. Directories are created with mode 0o755 (less your umask) and get
   no times: restoring a directory's mode could lock extraction out of it (a read-only or
   non-searchable directory), and its time would change again as its entries are written.
 - **Replacing files** (`overwrite: true`): the old file is replaced, even if it is read-only.
   It keeps its permission bits when the archive has none (archives made on Windows); its
   ownership, ACLs and extended attributes are not kept. If the process dies mid-replace, the
-  original is untouched and a 0o600 `.perfectzip-*.tmp` file may be left next to it. (Each
-  extraction also briefly creates and removes a `.perfectzip-*.umask` file in the destination,
-  to read the umask without changing it, which `umask(2)` can't do safely with other threads.)
+  original is untouched and a 0o600 `.perfectzip-*.tmp` file may be left next to it. (The
+  first time an extraction applies a recorded mode, it briefly creates and removes a
+  `.perfectzip-*.umask` file in that entry's directory, to read the umask without changing it,
+  which `umask(2)` can't do safely with other threads. A read-only destination that needs no
+  writes still extracts.)
 - **Skipped:** `.DS_Store` files and `__MACOSX` directories when zipping, and `__MACOSX/`
   entries when unzipping.
 - **Atomic output:** `zipFiles` writes to a temporary file next to `zipFilePath` and renames it
@@ -146,11 +150,12 @@ Extraction is designed for untrusted archives.
   checked against the declared sizes before extraction starts. Each entry must then produce
   exactly its declared size.
 - **Failure.** Structural, name, limit and password problems are found before anything is
-  written. Clashes with the filesystem and I/O problems only show up during extraction: a damaged deflate stream, a full
-  disk, a symlink inside the destination, a file where the destination has a directory, or
-  two names that the filesystem treats as one (such as a case-only difference on a
-  case-insensitive volume). These fail closed and leave a partial result: entries already
-  extracted stay, the failing file is removed, and a file it would have replaced is kept.
+  written. Clashes with the filesystem and I/O problems only show up during extraction: a
+  damaged deflate stream, a full disk, a symlink inside the destination, a file where the
+  destination has a directory, or two names that the filesystem treats as one (such as a
+  case-only difference on a case-insensitive volume). These fail closed and leave a partial
+  result: entries already extracted stay, the failing file is removed, and a file it would
+  have replaced is kept.
 - **Passwords.** ZipCrypto is cryptographically broken; it is supported for reading old
   archives only. Don't rely on it for secrecy.
 
