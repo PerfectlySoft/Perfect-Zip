@@ -5,17 +5,19 @@ let package = Package(
     name: "PerfectZip",
     platforms: [.macOS(.v12)],
     products: [
-        .library(name: "PerfectZip", targets: ["PerfectZip", "minizip"]),
+        .library(name: "PerfectZip", targets: ["PerfectZip"]),
     ],
     targets: [
         .target(
             name: "PerfectZip",
-            dependencies: ["minizip"],
+            dependencies: ["CZlib"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
-        .target(
-            name: "minizip",
-            linkerSettings: [.linkedLibrary("z")]
+        // The system zlib, used for deflate, inflate and CRC-32 only.
+        .systemLibrary(
+            name: "CZlib",
+            pkgConfig: "zlib",
+            providers: [.apt(["zlib1g-dev"])]
         ),
         .testTarget(
             name: "PerfectZipTests",

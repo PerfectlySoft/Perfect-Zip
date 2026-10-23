@@ -1,147 +1,118 @@
 import Foundation
-import minizip
 
+/// Creates and extracts zip archives.
+///
+/// `Zip` holds only its immutable ``limits``, so one instance can be shared between threads;
+/// each call works on its own files. Calls that write the same destination or archive
+/// concurrently are not coordinated.
 public final class Zip: Sendable {
-    public init() {}
+    /// Zip-bomb limits applied by ``unzipFile(source:destination:overwrite:password:)``.
+    public let limits: ZipLimits
 
-    /// Unzip a file from `source` into the `destination` directory.
+    public init(limits: ZipLimits = .default) {
+        self.limits = limits
+    }
+
+    /// Extracts the archive at `source` into the directory `destination`.
+    ///
+    /// - Parameters:
+    ///   - overwrite: When `false`, extraction is refused with ``ZipStatus/ZipCannotOverwrite``
+    ///     if `destination` already exists (or the archive names the same file twice). When
+    ///     `true`, the destination may exist and existing regular files are replaced.
+    ///   - password: The password for entries encrypted with traditional PKWARE encryption
+    ///     ("ZipCrypto"). Empty means none. A missing or wrong password fails with
+    ///     ``ZipStatus/UnzipIncorrectPassword`` before anything is written. AES-encrypted
+    ///     entries are not supported (``ZipStatus/UnzipFail``).
+    ///
+    /// The whole archive is validated before anything is written: its structure (every length
+    /// and offset, local headers against the central directory, no overlapping entries), the
+    /// ``limits``, every entry name and the password. Clashes with the filesystem (a file
+    /// where the destination has a directory, or names it treats as one, such as a case-only
+    /// difference on a case-insensitive volume) are only found during extraction, and fail
+    /// there with a partial result. If any name is absolute, has a `..`
+    /// component (with `/` or `\` separators), contains NUL, or would land outside
+    /// `destination` (resolved through symlinks), nothing is extracted and the result is
+    /// ``ZipStatus/UnzipUnsafePath``. While extracting, a symbolic link already inside the
+    /// destination is never followed; meeting one also fails with
+    /// ``ZipStatus/UnzipUnsafePath``. Symlink entries in the archive are extracted as regular
+    /// files containing the link text, never as links. `__MACOSX/` metadata is skipped.
+    ///
+    /// An existing file is replaced (with `overwrite: true`) by writing a temporary file next to
+    /// it and renaming it into place once complete, so a hard link is broken, not written
+    /// through, and a failed replacement keeps the original. If the process dies mid-replace,
+    /// the original is untouched and a 0o600 `.perfectzip-*.tmp` file may be left next to it.
+    /// (The first time a recorded mode is applied, a `.perfectzip-*.umask` probe file is briefly
+    /// created and removed in that entry's directory, to read the umask without changing it.)
+    ///
+    /// Permissions recorded in the archive are applied less the umask (as bsdtar does), never
+    /// with setuid, setgid or sticky bits, so an archive cannot create world-writable files the
+    /// process wouldn't. It is the effective umask of the entry's directory (a default ACL
+    /// takes the umask's place where supported); if it can't be read, 0o022 is used. A replaced file keeps its own permissions
+    /// when the archive records none; ownership, ACLs and extended attributes are not kept.
+    ///
+    /// On a failure during extraction, entries already written stay in `destination` (the
+    /// failing file itself is removed). No entry of a hostile archive is written outside
+    /// `destination`. That guarantee is about the archive: if another process moves a
+    /// directory out of `destination` during extraction, the entry being written at that
+    /// moment goes with it (later entries are placed from `destination` again).
     public func unzipFile(source: String, destination: String, overwrite: Bool, password: String = "") -> ZipStatus {
-        let fm = FileManager.default
-
-        guard fm.fileExists(atPath: source) else { return .FileNotFound }
-
-        if !overwrite && fm.fileExists(atPath: destination) {
-            return .ZipCannotOverwrite
-        }
-
-        let destPath = destination.hasSuffix("/") ? destination : destination + "/"
-        let bufferSize: UInt32 = 4096
-        var buffer = [UInt8](repeating: 0, count: Int(bufferSize))
-
-        guard let zip = unzOpen64(source) else { return .UnzipFail }
-        defer { unzClose(zip) }
-
-        guard unzGoToFirstFile(zip) == UNZ_OK else { return .UnzipFail }
-
-        var ret: Int32 = UNZ_OK
-        repeat {
-            guard unzOpenCurrentFile(zip) == UNZ_OK else { return .UnzipFail }
-
-            var fileInfo = unz_file_info64()
-            guard unzGetCurrentFileInfo64(zip, &fileInfo, nil, 0, nil, 0, nil, 0) == UNZ_OK else {
-                unzCloseCurrentFile(zip)
-                return .UnzipFail
-            }
-
-            let nameLen = Int(fileInfo.size_filename)
-            let nameBuf = UnsafeMutablePointer<CChar>.allocate(capacity: nameLen + 1)
-            defer { nameBuf.deallocate() }
-            unzGetCurrentFileInfo64(zip, &fileInfo, nameBuf, UInt(nameLen + 1), nil, 0, nil, 0)
-            nameBuf[nameLen] = 0
-
-            var pathString = String(cString: nameBuf)
-            let isDirectory = nameLen > 0 && nameBuf[nameLen - 1] == 47 // '/'
-
-            if pathString.contains("\\") {
-                pathString = pathString
-                    .replacingOccurrences(of: "\\", with: "/")
-                    .replacingOccurrences(of: "//", with: "/")
-            }
-            let fullPath = destPath + pathString
-
-            if isDirectory {
-                if !fullPath.contains("__MACOSX") {
-                    try? fm.createDirectory(atPath: fullPath, withIntermediateDirectories: true)
-                }
-            } else {
-                let parentPath = URL(fileURLWithPath: fullPath).deletingLastPathComponent().path
-                try? fm.createDirectory(atPath: parentPath, withIntermediateDirectories: true)
-
-                if !fm.fileExists(atPath: fullPath) || overwrite {
-                    fm.createFile(atPath: fullPath, contents: nil)
-                    if let writeHandle = FileHandle(forWritingAtPath: fullPath) {
-                        defer { writeHandle.closeFile() }
-                        var readBytes: Int32 = 0
-                        repeat {
-                            readBytes = buffer.withUnsafeMutableBytes { ptr in
-                                unzReadCurrentFile(zip, ptr.baseAddress!, bufferSize)
-                            }
-                            if readBytes > 0 {
-                                writeHandle.write(Data(buffer.prefix(Int(readBytes))))
-                            }
-                        } while readBytes > 0
-                    }
-                }
-            }
-
-            let crcRet = unzCloseCurrentFile(zip)
-            if crcRet == UNZ_CRCERROR { return .UnzipFail }
-            ret = unzGoToNextFile(zip)
-
-        } while ret == UNZ_OK
-
-        return .ZipSuccess
+        Unzipper(source: source, destination: destination, overwrite: overwrite, password: password,
+                 limits: limits).run()
     }
 
-    /// Zip the files/directories at `paths` into a single archive at `zipFilePath`.
+    /// Archives the files and directories at `paths` into a new zip file at `zipFilePath`.
+    ///
+    /// Each path becomes a top-level entry named after its last component; directories are
+    /// added recursively, including empty ones. Symbolic links found while walking a directory
+    /// are skipped; a path given directly in `paths` is followed if it is a link. `.DS_Store`
+    /// files and `__MACOSX` directories are skipped. Two entries with the same name (for example
+    /// `a/x.txt` and `b/x.txt` both given in `paths`) fail with ``ZipStatus/ZipFail``.
+    /// Unix permissions and modification times are recorded; Zip64 is used where needed.
+    ///
+    /// The archive is written to a temporary file in the same directory and renamed into place,
+    /// so on failure an existing `zipFilePath` is left untouched. If the process dies
+    /// mid-write, a `.<name>.<UUID>.tmp` file may be left next to `zipFilePath`.
+    ///
+    /// - Parameters:
+    ///   - zipFilePath: Must end in `.zip`.
+    ///   - overwrite: When `false`, an existing `zipFilePath` fails with
+    ///     ``ZipStatus/ZipCannotOverwrite``.
+    public func zipFiles(paths: [String], zipFilePath: String, overwrite: Bool) -> ZipStatus {
+        Zipper(paths: paths, zipFilePath: zipFilePath, overwrite: overwrite).run()
+    }
+
+    /// 3.x signature. Writing encrypted archives is no longer supported: a non-empty `password`
+    /// returns ``ZipStatus/ZipEncryptionUnsupported`` without creating anything. (3.x wrote a
+    /// wrong check byte, so its encrypted archives could not be opened by other tools.)
+    @available(*, deprecated, message: "Encrypted archives are no longer written; use zipFiles(paths:zipFilePath:overwrite:).")
     public func zipFiles(paths: [String], zipFilePath: String, overwrite: Bool, password: String?) -> ZipStatus {
-        let fm = FileManager.default
-
-        guard zipFilePath.hasSuffix(".zip") else { return .ZipFail }
-
-        if !overwrite && fm.fileExists(atPath: zipFilePath) { return .ZipCannotOverwrite }
-
-        for path in paths {
-            guard fm.fileExists(atPath: path) else { return .FileNotFound }
-        }
-
-        let utils = ZipUtilities()
-        var processedPaths = [ProcessedFilePath]()
-        for path in paths {
-            processedPaths += utils.processZipPaths(path, parentDir: "")
-        }
-
-        guard let zip = zipOpen(zipFilePath, APPEND_STATUS_CREATE) else { return .ZipFail }
-        defer { zipClose(zip, nil) }
-
-        let chunkSize = 16384
-
-        for path in processedPaths {
-            var isDir: ObjCBool = false
-            fm.fileExists(atPath: path.filePath, isDirectory: &isDir)
-            guard !isDir.boolValue, let fileName = path.fileName else { continue }
-
-            guard let readHandle = FileHandle(forReadingAtPath: path.filePath) else {
-                return .ZipFail
-            }
-            defer { readHandle.closeFile() }
-
-            var zipInfo = zip_fileinfo(
-                tmz_date: tm_zip(tm_sec: 0, tm_min: 0, tm_hour: 0, tm_mday: 0, tm_mon: 0, tm_year: 0),
-                dosDate: 0, internal_fa: 0, external_fa: 0
-            )
-            let entryName = path.fileDir.isEmpty ? fileName : path.fileDir + "/" + fileName
-
-            if let pw = password, !pw.isEmpty {
-                zipOpenNewFileInZip3(zip, entryName, &zipInfo, nil, 0, nil, 0, nil,
-                                     Z_DEFLATED, Z_DEFAULT_COMPRESSION, 0,
-                                     -MAX_WBITS, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY, pw, 0)
-            } else {
-                zipOpenNewFileInZip3(zip, entryName, &zipInfo, nil, 0, nil, 0, nil,
-                                     Z_DEFLATED, Z_DEFAULT_COMPRESSION, 0,
-                                     -MAX_WBITS, DEF_MEM_LEVEL, Z_DEFAULT_STRATEGY, nil, 0)
-            }
-
-            var data = readHandle.readData(ofLength: chunkSize)
-            while !data.isEmpty {
-                _ = data.withUnsafeBytes { ptr in
-                    zipWriteInFileInZip(zip, ptr.baseAddress!, UInt32(data.count))
-                }
-                data = readHandle.readData(ofLength: chunkSize)
-            }
-            zipCloseFileInZip(zip)
-        }
-
-        return .ZipSuccess
+        if let password, !password.isEmpty { return .ZipEncryptionUnsupported }
+        return zipFiles(paths: paths, zipFilePath: zipFilePath, overwrite: overwrite)
     }
+}
+
+/// Limits that stop zip bombs during ``Zip/unzipFile(source:destination:overwrite:password:)``.
+///
+/// Both are checked against the sizes the archive declares, before anything is written, and
+/// extraction then refuses any entry that produces more bytes than it declared. Exceeding a
+/// limit returns ``ZipStatus/UnzipLimitExceeded``.
+public struct ZipLimits: Sendable, Hashable {
+    /// The most bytes all entries together may expand to. Default 16 GiB.
+    public var maxTotalUncompressedSize: UInt64
+    /// The highest ratio of declared uncompressed size to compressed size (integer division)
+    /// allowed for any entry of 1 MiB or more, and for the sum over all extracted entries
+    /// (skipped `__MACOSX/` entries are left out) once that sum is
+    /// 1 MiB or more. Default 200. Deflate cannot exceed about 1032:1, so a value above that
+    /// disables the check.
+    public var maxCompressionRatio: UInt64
+
+    public init(maxTotalUncompressedSize: UInt64 = 16 << 30, maxCompressionRatio: UInt64 = 200) {
+        self.maxTotalUncompressedSize = maxTotalUncompressedSize
+        self.maxCompressionRatio = maxCompressionRatio
+    }
+
+    /// 16 GiB in total, ratio 200:1.
+    public static let `default` = ZipLimits()
+    /// No limits. Only for archives from a trusted source.
+    public static let unlimited = ZipLimits(maxTotalUncompressedSize: .max, maxCompressionRatio: .max)
 }
